@@ -67,7 +67,7 @@ app/
 - Kotlin 1.9.20+
 
 ### Setup Instructions
-1. Clone the repository to `$HOME/Thumbtack/donetick`
+1. Clone the repository
 2. Open the project in Android Studio
 3. Sync the project with Gradle files
 4. Build and run the application on a device or emulator
