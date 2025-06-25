@@ -42,8 +42,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.donetick.app.R
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /**
  * Screen for displaying the list of chores with notifications
@@ -292,7 +294,7 @@ private fun ChoreItemCard(
 private fun formatDueDate(dueDateString: String): String? {
     return try {
         // Try to parse the date string and format it nicely
-        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
+        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.getDefault())
         val outputFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
         val date = inputFormat.parse(dueDateString)
         date?.let { outputFormat.format(it) }
