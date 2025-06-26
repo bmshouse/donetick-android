@@ -155,7 +155,6 @@ signing.properties
 # Test results
 test-results/
 test-output/
-*.xml
 
 # Coverage reports
 coverage/
