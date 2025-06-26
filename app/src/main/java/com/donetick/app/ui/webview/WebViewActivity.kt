@@ -13,24 +13,11 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerDefaults
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.donetick.app.notification.NotificationPermissionHelper
 import com.donetick.app.ui.settings.SettingsActivity
@@ -40,9 +27,18 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
 /**
- * Activity for displaying DoneTick server interface through WebView
+ * Main activity for displaying DoneTick server interface through WebView.
+ *
+ * This activity hosts the WebViewScreen and handles:
+ * - WebView configuration and JavaScript injection
+ * - API data capture for chores and notifications
+ * - Navigation to ChoresListActivity via button click
+ * - Standard WebView back navigation
+ *
+ * Architecture: Uses a simplified single-view approach instead of HorizontalPager
+ * for better performance and cleaner navigation patterns.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @AndroidEntryPoint
 class WebViewActivity : ComponentActivity() {
 
@@ -55,7 +51,7 @@ class WebViewActivity : ComponentActivity() {
 
     private val backPressedCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
-            // Default back press behavior - will be overridden in compose
+            // Handle WebView back navigation or finish activity
             if (!viewModel.goBack()) {
                 finish()
             }
@@ -103,113 +99,22 @@ class WebViewActivity : ComponentActivity() {
         setContent {
             DoneTickTheme {
                 val uiState by viewModel.uiState.collectAsState()
-                val pagerState = rememberPagerState(pageCount = { 2 })
-                val scope = rememberCoroutineScope()
 
-                // Define the custom fling behavior to make the pager less sensitive
-                val flingBehavior = PagerDefaults.flingBehavior(
-                    state = pagerState,
-                    snapVelocityThreshold = 600.dp
+                WebViewScreen(
+                    uiState = uiState,
+                    onRefresh = viewModel::refresh,
+                    onMenuClick = viewModel::showSettings,
+                    onChoresClick = {
+                        // Launch ChoresListActivity with current chores data
+                        val intent = ChoresListActivity.createIntent(this@WebViewActivity, uiState.choresList)
+                        startActivity(intent)
+                    },
+                    onWebViewCreated = { webView ->
+                        this@WebViewActivity.webView = webView
+                        setupWebView(webView)
+                        viewModel.setWebView(webView)
+                    }
                 )
-
-                // The nested scroll connection for the WebView
-                val nestedScrollInteropConnection = rememberNestedScrollInteropConnection()
-
-                // Update back press callback to handle pager navigation
-                androidx.compose.runtime.LaunchedEffect(pagerState.currentPage) {
-                    backPressedCallback.isEnabled = true
-                    if (pagerState.currentPage == 1) {
-                        // On chores page, back button should go to WebView page
-                        backPressedCallback.remove()
-                        onBackPressedDispatcher.addCallback(this@WebViewActivity, object : OnBackPressedCallback(true) {
-                            override fun handleOnBackPressed() {
-                                scope.launch {
-                                    pagerState.animateScrollToPage(0)
-                                }
-                            }
-                        })
-                    } else {
-                        // On WebView page, use original back press behavior
-                        backPressedCallback.remove()
-                        onBackPressedDispatcher.addCallback(this@WebViewActivity, object : OnBackPressedCallback(true) {
-                            override fun handleOnBackPressed() {
-                                if (!viewModel.goBack()) {
-                                    finish()
-                                }
-                            }
-                        })
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .nestedScroll(nestedScrollInteropConnection)
-                ) {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = androidx.compose.ui.Modifier.fillMaxSize(),
-                        flingBehavior = flingBehavior,
-                        beyondBoundsPageCount = 1
-                    ) { page ->
-                        when (page) {
-                            0 -> {
-                                // WebView page
-                                WebViewScreen(
-                                    uiState = uiState,
-                                    onRefresh = viewModel::refresh,
-                                    onMenuClick = viewModel::showSettings,
-                                    onChoresClick = {
-                                        scope.launch {
-                                            pagerState.animateScrollToPage(1)
-                                        }
-                                    },
-                                    onWebViewCreated = { webView ->
-                                        this@WebViewActivity.webView = webView
-                                        setupWebView(webView)
-                                        viewModel.setWebView(webView)
-                                    }
-                                )
-                            }
-                            1 -> {
-                                // Chores list page
-                                ChoresListScreen(
-                                    choresList = uiState.choresList,
-                                    onBackClick = {
-                                        scope.launch {
-                                            pagerState.animateScrollToPage(0)
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    // Page indicators (only show when chores are available)
-                    if (uiState.choresList.isNotEmpty()) {
-                        Row(
-                            modifier = androidx.compose.ui.Modifier
-                                .align(androidx.compose.ui.Alignment.BottomCenter)
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            repeat(2) { index ->
-                                Box(
-                                    modifier = androidx.compose.ui.Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (pagerState.currentPage == index) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                                            }
-                                        )
-                                )
-                            }
-                        }
-                    }
-                }
             }
         }
     }

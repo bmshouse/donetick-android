@@ -53,6 +53,12 @@
             android:theme="@style/Theme.DoneTick"
             android:parentActivityName=".ui.webview.WebViewActivity" />
 
+        <activity
+            android:name=".ui.webview.ChoresListActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DoneTick"
+            android:parentActivityName=".ui.webview.WebViewActivity" />
+
         <!-- Notification receiver for chore reminders -->
         <receiver
             android:name=".notification.ChoreNotificationReceiver"
