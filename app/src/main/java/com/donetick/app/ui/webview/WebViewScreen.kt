@@ -1,9 +1,9 @@
 package com.donetick.app.ui.webview
 
+import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -167,13 +167,24 @@ private fun ErrorContent(
 private fun WebViewContainer(
     onWebViewCreated: (WebView) -> Unit
 ) {
+    // This modifier is correct and important.
+    val modifier = Modifier.fillMaxSize()
+
     AndroidView(
         factory = { context ->
+            // Factory block for creating the WebView
             WebView(context).apply {
+                // Ensure the WebView's layout parameters are set to fill its parent
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+
+                // Let the activity handle the detailed setup
                 onWebViewCreated(this)
             }
         },
-        modifier = Modifier.fillMaxSize()
+        modifier = modifier
     )
 }
 

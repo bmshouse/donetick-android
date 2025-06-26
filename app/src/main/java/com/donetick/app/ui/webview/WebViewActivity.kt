@@ -3,7 +3,9 @@ package com.donetick.app.ui.webview
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.View
 import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -15,6 +17,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -23,7 +26,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.donetick.app.notification.NotificationPermissionHelper
@@ -100,6 +106,15 @@ class WebViewActivity : ComponentActivity() {
                 val pagerState = rememberPagerState(pageCount = { 2 })
                 val scope = rememberCoroutineScope()
 
+                // Define the custom fling behavior to make the pager less sensitive
+                val flingBehavior = PagerDefaults.flingBehavior(
+                    state = pagerState,
+                    snapVelocityThreshold = 600.dp
+                )
+
+                // The nested scroll connection for the WebView
+                val nestedScrollInteropConnection = rememberNestedScrollInteropConnection()
+
                 // Update back press callback to handle pager navigation
                 androidx.compose.runtime.LaunchedEffect(pagerState.currentPage) {
                     backPressedCallback.isEnabled = true
@@ -126,10 +141,16 @@ class WebViewActivity : ComponentActivity() {
                     }
                 }
 
-                Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .nestedScroll(nestedScrollInteropConnection)
+                ) {
                     HorizontalPager(
                         state = pagerState,
-                        modifier = androidx.compose.ui.Modifier.fillMaxSize()
+                        modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+                        flingBehavior = flingBehavior,
+                        beyondBoundsPageCount = 1
                     ) { page ->
                         when (page) {
                             0 -> {
@@ -197,6 +218,14 @@ class WebViewActivity : ComponentActivity() {
      * Sets up WebView with proper configuration and clients
      */
     private fun setupWebView(webView: WebView) {
+
+        webView.settings.apply {
+            cacheMode = WebSettings.LOAD_DEFAULT // Use the default caching strategy
+        }
+
+        // Use a hardware layer to enable GPU rendering
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
         // Add JavaScript interface for capturing API data
         webView.addJavascriptInterface(ApiDataCapture(), "AndroidApiCapture")
 
