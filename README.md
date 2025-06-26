@@ -7,22 +7,40 @@ A Kotlin Android application that serves as a thin wrapper for DoneTick server i
 - **Initial Setup Screen**: Configure DoneTick server URL on first launch with validation
 - **URL Validation**: Comprehensive server URL validation and connectivity testing
 - **WebView Integration**: Full DoneTick server interface through WebView with JavaScript support
+- **Chores Management**: Dedicated chores list view with notification management
+- **API Interception**: Automatic capture of chores data from DoneTick server API calls
+- **Android Notifications**: Native Android notifications for chore reminders with scheduling
 - **Secure Storage**: Server URL stored securely using EncryptedSharedPreferences
 - **Settings Management**: Change server URL and manage configuration with confirmation dialogs
 - **Material Design 3**: Modern UI following Material Design guidelines with dynamic theming
 - **MVVM Architecture**: Clean architecture with ViewModels and StateFlow for reactive updates
 - **Error Handling**: Comprehensive error handling with user-friendly messages
 - **Network Awareness**: Network connectivity checks and appropriate error messages
-- **Back Navigation**: Proper WebView back navigation and activity management
+- **Two-View Architecture**: Separate WebView and ChoresList activities for clean navigation
 
 ## Architecture
 
 - **MVVM Pattern**: ViewModels manage UI state and business logic
+- **Two-View Architecture**: Separate activities for WebView and ChoresList for clean navigation
 - **Dependency Injection**: Hilt for dependency management and testability
 - **Repository Pattern**: Clean separation of data access with secure preferences
 - **StateFlow**: Reactive UI updates and state management
 - **Clean Architecture**: Separation of concerns across data, domain, and UI layers
 - **Use Cases**: Domain-specific business logic encapsulation
+
+### Navigation Architecture
+
+The app uses a two-activity architecture:
+
+1. **WebViewActivity**: Main activity hosting the DoneTick server interface
+   - Handles WebView configuration and JavaScript injection
+   - Captures API data for chores and notifications
+   - Provides button-based navigation to ChoresListActivity
+
+2. **ChoresListActivity**: Dedicated activity for chores management
+   - Displays chores with notification status
+   - Receives chores data via Intent extras
+   - Standard back navigation to WebViewActivity
 
 ## Technology Stack
 
@@ -49,9 +67,10 @@ app/
 │   ├── ui/
 │   │   ├── components/     # Reusable UI components
 │   │   ├── setup/          # Setup screen implementation
-│   │   ├── webview/        # WebView screen implementation
+│   │   ├── webview/        # WebView and ChoresList screen implementations
 │   │   ├── settings/       # Settings screen implementation
 │   │   └── theme/          # Material Design 3 theming
+│   ├── notification/       # Android notification management
 │   ├── di/                 # Dependency injection modules
 │   └── utils/              # Utility classes (ErrorHandler, NetworkUtils)
 ├── src/main/res/           # Resources (layouts, strings, themes, icons)
@@ -90,8 +109,9 @@ app/
 1. **First Launch**: Enter your DoneTick server URL in the setup screen
 2. **URL Validation**: The app validates the URL format and tests connectivity
 3. **WebView Interface**: Access the full DoneTick web interface through the integrated WebView
-4. **Settings**: Access settings through the menu to change server URL or disconnect
-5. **Navigation**: Use the back button to navigate within the WebView or return to previous screens
+4. **Chores Management**: Tap the chores button to view upcoming chores and notifications
+5. **Settings**: Access settings through the menu to change server URL or disconnect
+6. **Navigation**: Use standard Android navigation between WebView and ChoresList activities
 
 ## Configuration
 
