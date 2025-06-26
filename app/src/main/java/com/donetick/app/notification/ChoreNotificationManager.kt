@@ -18,7 +18,10 @@ import com.donetick.app.ui.MainActivity
 import com.donetick.app.ui.webview.ChoreItem
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
