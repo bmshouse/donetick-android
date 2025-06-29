@@ -17,7 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Schedule
@@ -36,16 +36,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.donetick.app.R
 import java.text.SimpleDateFormat
-import java.time.Instant
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
+
 
 /**
  * Screen for displaying the list of chores with notifications
@@ -70,7 +67,7 @@ fun ChoresListScreen(
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            imageVector = Icons.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.go_back)
                         )
                     }
@@ -281,7 +278,7 @@ private fun formatDueDate(dueDateString: String): String? {
     return try {
         // Try to parse the date string and format it nicely
         val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.getDefault())
-        val outputFormat = SimpleDateFormat("MMM dd, yyyy at HH:mm", Locale.getDefault())
+        val outputFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
         val date = inputFormat.parse(dueDateString)
         date?.let { outputFormat.format(it) }
     } catch (e: Exception) {

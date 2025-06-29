@@ -84,18 +84,12 @@ class ChoreNotificationReceiver : BroadcastReceiver() {
      */
     private fun isNotificationAlreadyActive(context: Context, notificationId: Int): Boolean {
         return try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                // Use getActiveNotifications() for API 23+
-                val notificationManager = NotificationManagerCompat.from(context)
-                val activeNotifications = notificationManager.activeNotifications
-                val isActive = activeNotifications.any { it.id == notificationId }
-                Log.d(TAG, "Checking active notifications: found ${activeNotifications.size} active, notification ID $notificationId is ${if (isActive) "active" else "not active"}")
-                isActive
-            } else {
-                // For older APIs, we can't reliably check, so assume it's not active
-                Log.d(TAG, "API level < 23, cannot check active notifications, assuming notification ID $notificationId is not active")
-                false
-            }
+            // Use getActiveNotifications() for API 23+
+            val notificationManager = NotificationManagerCompat.from(context)
+            val activeNotifications = notificationManager.activeNotifications
+            val isActive = activeNotifications.any { it.id == notificationId }
+            Log.d(TAG, "Checking active notifications: found ${activeNotifications.size} active, notification ID $notificationId is ${if (isActive) "active" else "not active"}")
+            isActive
         } catch (e: Exception) {
             Log.e(TAG, "Error checking active notifications", e)
             // If we can't check, assume it's not active to avoid blocking notifications
