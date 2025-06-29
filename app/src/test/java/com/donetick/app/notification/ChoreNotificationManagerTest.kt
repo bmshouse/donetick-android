@@ -328,4 +328,115 @@ class ChoreNotificationManagerTest {
         // In practice, Android's notify() with the same ID replaces the existing notification
         assertEquals(firstNotificationCount, secondNotificationCount)
     }
+
+    @Test
+    fun `scheduleChoreNotifications handles HTML description for immediate notification`() {
+        // Given - overdue chore with HTML description
+        val pastDate = "2020-01-01T10:00:00Z"
+        val htmlDescription = "<p>Work</p><li>Do</li><li>It</li><br><strong>Important</strong>"
+        val chores = listOf(
+            ChoreItem(
+                id = 1,
+                name = "HTML Chore",
+                description = htmlDescription,
+                notification = true,
+                isActive = true,
+                nextDueDate = pastDate
+            )
+        )
+
+        // When
+        choreNotificationManager.scheduleChoreNotifications(chores)
+
+        // Then - should schedule the notification (HTML conversion is tested indirectly)
+        assertEquals(1, choreNotificationManager.getScheduledNotificationCount())
+        assertTrue(choreNotificationManager.getScheduledNotificationIds().contains(1))
+        assertEquals(0, shadowAlarmManager.scheduledAlarms.size) // Immediate notification, no alarm
+    }
+
+    @Test
+    fun `scheduleChoreNotifications handles empty HTML description`() {
+        // Given - overdue chore with empty HTML description
+        val pastDate = "2020-01-01T10:00:00Z"
+        val chores = listOf(
+            ChoreItem(
+                id = 1,
+                name = "Empty Description Chore",
+                description = "",
+                notification = true,
+                isActive = true,
+                nextDueDate = pastDate
+            )
+        )
+
+        // When
+        choreNotificationManager.scheduleChoreNotifications(chores)
+
+        // Then - should schedule the notification with default text
+        assertEquals(1, choreNotificationManager.getScheduledNotificationCount())
+        assertTrue(choreNotificationManager.getScheduledNotificationIds().contains(1))
+        assertEquals(0, shadowAlarmManager.scheduledAlarms.size)
+    }
+
+    @Test
+    fun `scheduleChoreNotifications handles null description`() {
+        // Given - overdue chore with null description
+        val pastDate = "2020-01-01T10:00:00Z"
+        val chores = listOf(
+            ChoreItem(
+                id = 1,
+                name = "Null Description Chore",
+                description = null,
+                notification = true,
+                isActive = true,
+                nextDueDate = pastDate
+            )
+        )
+
+        // When
+        choreNotificationManager.scheduleChoreNotifications(chores)
+
+        // Then - should schedule the notification with default text
+        assertEquals(1, choreNotificationManager.getScheduledNotificationCount())
+        assertTrue(choreNotificationManager.getScheduledNotificationIds().contains(1))
+        assertEquals(0, shadowAlarmManager.scheduledAlarms.size)
+    }
+
+    @Test
+    fun `scheduleChoreNotifications handles complex HTML description`() {
+        // Given - overdue chore with complex HTML description
+        val pastDate = "2020-01-01T10:00:00Z"
+        val complexHtmlDescription = """
+            <div>
+                <h2>Weekly Tasks</h2>
+                <ul>
+                    <li><strong>Clean</strong> the kitchen</li>
+                    <li><em>Vacuum</em> the living room</li>
+                    <li>Take out <u>trash</u></li>
+                </ul>
+                <p>Don't forget to <a href="#">check the schedule</a>!</p>
+                <br/>
+                <span style="color: red;">Important: Complete by Friday</span>
+            </div>
+        """.trimIndent()
+
+        val chores = listOf(
+            ChoreItem(
+                id = 1,
+                name = "Complex HTML Chore",
+                description = complexHtmlDescription,
+                notification = true,
+                isActive = true,
+                nextDueDate = pastDate
+            )
+        )
+
+        // When
+        choreNotificationManager.scheduleChoreNotifications(chores)
+
+        // Then - should schedule the notification (HTML should be converted to plain text)
+        assertEquals(1, choreNotificationManager.getScheduledNotificationCount())
+        assertTrue(choreNotificationManager.getScheduledNotificationIds().contains(1))
+        assertEquals(0, shadowAlarmManager.scheduledAlarms.size)
+    }
 }

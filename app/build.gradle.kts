@@ -10,9 +10,14 @@ plugins {
 }
 
 // Load signing properties if they exist
+// This allows the project to build successfully even when checked out from GitHub
+// without the signing keystore and properties files
 val signingPropertiesFile = rootProject.file("signing.properties")
+val keystoreFile = rootProject.file("donetick-release-key.keystore")
 val signingProperties = Properties()
-if (signingPropertiesFile.exists()) {
+val hasSigningConfig = signingPropertiesFile.exists() && keystoreFile.exists()
+
+if (hasSigningConfig) {
     signingProperties.load(FileInputStream(signingPropertiesFile))
 }
 
@@ -25,7 +30,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0.4"
+        versionName = "1.0.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -34,18 +39,23 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = file("../donetick-release-key.keystore")
-            storePassword = signingProperties.getProperty("storePassword")
-            keyAlias = "donetick-key-alias"
-            keyPassword = signingProperties.getProperty("keyPassword")
+        if (hasSigningConfig) {
+            create("release") {
+                storeFile = keystoreFile
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = "donetick-key-alias"
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            // Only apply signing config if keystore and properties exist
+            if (hasSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -56,8 +66,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = "11"
+
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+            // Fix annotation target warnings for Hilt and other annotations
+            freeCompilerArgs.add("-Xannotation-default-target=param-property")
+        }
     }
     
     // Configure Java compiler to show all warnings
@@ -80,6 +95,12 @@ android {
 kapt {
     correctErrorTypes = true
     useBuildCache = true
+    // Improve KAPT performance and reduce warnings
+    includeCompileClasspath = false
+    arguments {
+        arg("dagger.fastInit", "enabled")
+        arg("dagger.hilt.android.internal.disableAndroidSuperclassValidation", "true")
+    }
 }
 
 dependencies {
@@ -111,8 +132,7 @@ dependencies {
     kapt("com.google.dagger:hilt-compiler:2.56.2")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     
-    // Security (EncryptedSharedPreferences)
-    implementation("androidx.security:security-crypto:1.1.0-beta01")
+    // Security - Using Android Keystore directly (no longer using deprecated security-crypto library)
     
     // WebView
     implementation("androidx.webkit:webkit:1.14.0")
