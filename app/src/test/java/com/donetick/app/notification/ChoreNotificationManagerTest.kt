@@ -296,4 +296,36 @@ class ChoreNotificationManagerTest {
         assertTrue(choreNotificationManager.getScheduledNotificationIds().contains(1))
         assertEquals(1, shadowAlarmManager.scheduledAlarms.size)
     }
+
+    @Test
+    fun `scheduleChoreNotifications prevents duplicate immediate notifications for overdue chores`() {
+        // Given - overdue chore that would trigger immediate notification
+        val pastDate = "2020-01-01T10:00:00Z"
+        val chores = listOf(
+            ChoreItem(
+                id = 1,
+                name = "Overdue chore",
+                notification = true,
+                isActive = true,
+                nextDueDate = pastDate
+            )
+        )
+
+        // When - schedule notifications twice (simulating app restart or data reload)
+        choreNotificationManager.scheduleChoreNotifications(chores)
+        val firstNotificationCount = shadowNotificationManager.allNotifications.size
+
+        choreNotificationManager.scheduleChoreNotifications(chores)
+        val secondNotificationCount = shadowNotificationManager.allNotifications.size
+
+        // Then - should only have one notification, not duplicates
+        assertEquals(1, choreNotificationManager.getScheduledNotificationCount())
+        assertTrue(choreNotificationManager.getScheduledNotificationIds().contains(1))
+        assertEquals(0, shadowAlarmManager.scheduledAlarms.size) // No future alarms for overdue chores
+
+        // The notification count should be the same after the second call
+        // Note: This test assumes the notification system properly handles duplicate IDs
+        // In practice, Android's notify() with the same ID replaces the existing notification
+        assertEquals(firstNotificationCount, secondNotificationCount)
+    }
 }

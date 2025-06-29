@@ -148,6 +148,12 @@ class ChoreNotificationManager @Inject constructor(
             return
         }
 
+        // Check if a notification for this chore already exists
+        if (isNotificationAlreadyActive(chore.id)) {
+            Log.d(TAG, "Notification for chore '${chore.name}' (ID: ${chore.id}) already exists, skipping")
+            return
+        }
+
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -173,6 +179,31 @@ class ChoreNotificationManager @Inject constructor(
             Log.d(TAG, "Showed immediate notification for chore '${chore.name}'")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException showing notification", e)
+        }
+    }
+
+    /**
+     * Checks if a notification with the given ID is already active
+     * @param notificationId The notification ID to check
+     * @return true if a notification with this ID is already active, false otherwise
+     */
+    private fun isNotificationAlreadyActive(notificationId: Int): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                // Use getActiveNotifications() for API 23+
+                val activeNotifications = notificationManager.activeNotifications
+                val isActive = activeNotifications.any { it.id == notificationId }
+                Log.d(TAG, "Checking active notifications: found ${activeNotifications.size} active, notification ID $notificationId is ${if (isActive) "active" else "not active"}")
+                isActive
+            } else {
+                // For older APIs, we can't reliably check, so assume it's not active
+                Log.d(TAG, "API level < 23, cannot check active notifications, assuming notification ID $notificationId is not active")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking active notifications", e)
+            // If we can't check, assume it's not active to avoid blocking notifications
+            false
         }
     }
 

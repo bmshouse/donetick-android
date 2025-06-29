@@ -243,20 +243,6 @@ private fun ChoreItemCard(
                 }
             }
             
-            // Description
-            chore.description?.let { description ->
-                if (description.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            
             // Due date and frequency info
             val dueDateText = chore.nextDueDate?.let { formatDueDate(it) }
             val frequencyText = formatFrequency(chore.frequencyType, chore.frequency)
@@ -295,7 +281,7 @@ private fun formatDueDate(dueDateString: String): String? {
     return try {
         // Try to parse the date string and format it nicely
         val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.getDefault())
-        val outputFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+        val outputFormat = SimpleDateFormat("MMM dd, yyyy at HH:mm", Locale.getDefault())
         val date = inputFormat.parse(dueDateString)
         date?.let { outputFormat.format(it) }
     } catch (e: Exception) {
