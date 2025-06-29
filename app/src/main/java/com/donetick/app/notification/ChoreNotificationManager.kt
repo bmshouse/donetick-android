@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.text.Html
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -165,10 +166,14 @@ class ChoreNotificationManager @Inject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Convert HTML description to plain text for notification
+        val notificationText = htmlToNotificationText(chore.description).takeIf { it.isNotEmpty() }
+            ?: "This chore is now due"
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification) // You'll need to add this icon
             .setContentTitle("Chore Due: ${chore.name}")
-            .setContentText(chore.description?.takeIf { it.isNotEmpty() } ?: "This chore is now due")
+            .setContentText(notificationText)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
@@ -310,6 +315,40 @@ class ChoreNotificationManager @Inject constructor(
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+    }
+
+    /**
+     * Converts HTML-formatted text to plain text suitable for notifications
+     * Handles common HTML tags like <p>, <li>, <ul>, <ol>, <br>, etc.
+     */
+    private fun htmlToNotificationText(htmlText: String?): String {
+        if (htmlText.isNullOrEmpty()) return ""
+
+        try {
+            // Use Html.fromHtml to parse HTML and convert to plain text
+            val spanned = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                Html.fromHtml(htmlText, Html.FROM_HTML_MODE_COMPACT)
+            } else {
+                @Suppress("DEPRECATION")
+                Html.fromHtml(htmlText)
+            }
+
+            // Convert to string and clean up extra whitespace
+            val plainText = spanned.toString()
+                .replace(Regex("\\s+"), " ") // Replace multiple whitespace with single space
+                .trim()
+
+            // Limit length for notification display (Android notifications have character limits)
+            return if (plainText.length > 200) {
+                plainText.take(197) + "..."
+            } else {
+                plainText
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error converting HTML to plain text: $htmlText", e)
+            // Fallback: return original text with basic HTML tag removal
+            return htmlText.replace(Regex("<[^>]*>"), "").trim()
         }
     }
 }
