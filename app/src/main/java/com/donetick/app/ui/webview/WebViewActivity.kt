@@ -2,8 +2,10 @@ package com.donetick.app.ui.webview
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.autofill.AutofillManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -150,6 +152,10 @@ class WebViewActivity : ComponentActivity() {
                 injectApiInterceptorScript(view)
                 // Fix incorrect autocomplete attributes so password managers can detect the login form
                 injectAutofillFixScript(view)
+                // Force the Autofill Framework to re-scan the WebView after the JS fix has run.
+                // Without this, Chromium's cached form parse (which saw autocomplete="password")
+                // would never notify AutofillManager when the user taps the field.
+                triggerAutofillIfLoginPage(view)
             }
 
             override fun onReceivedError(
@@ -189,6 +195,24 @@ class WebViewActivity : ComponentActivity() {
                 title?.let { viewModel.updatePageTitle(it) }
             }
         }
+    }
+
+    /**
+     * Detects whether the current page has a password field, then calls requestAutofill()
+     * to force the Autofill Framework to re-query the WebView's virtual structure.
+     * The 300ms delay gives the autocomplete-fix JS time to execute first.
+     */
+    private fun triggerAutofillIfLoginPage(webView: WebView?) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        webView?.postDelayed({
+            webView.evaluateJavascript(
+                "document.querySelectorAll('input[type=\"password\"]').length"
+            ) { result ->
+                if ((result?.trim()?.toIntOrNull() ?: 0) > 0) {
+                    getSystemService(AutofillManager::class.java)?.requestAutofill(webView)
+                }
+            }
+        }, 300)
     }
 
     /**
