@@ -59,7 +59,7 @@ class ChoreNotificationManagerTest {
     @Test
     fun `scheduleChoreNotifications filters and schedules only notification-enabled chores`() {
         // Given
-        val futureDate = "2025-12-31T10:00:00Z"
+        val futureDate = "2035-12-31T10:00:00Z"
         val chores = listOf(
             ChoreItem(
                 id = 1,
@@ -114,7 +114,7 @@ class ChoreNotificationManagerTest {
                 name = "Initial chore",
                 notification = true,
                 isActive = true,
-                nextDueDate = "2025-12-31T10:00:00Z"
+                nextDueDate = "2035-12-31T10:00:00Z"
             )
         )
         choreNotificationManager.scheduleChoreNotifications(initialChores)
@@ -127,7 +127,7 @@ class ChoreNotificationManagerTest {
                 name = "New chore",
                 notification = true,
                 isActive = true,
-                nextDueDate = "2025-12-31T11:00:00Z"
+                nextDueDate = "2035-12-31T11:00:00Z"
             )
         )
         choreNotificationManager.scheduleChoreNotifications(newChores)
@@ -171,7 +171,7 @@ class ChoreNotificationManagerTest {
     @Test
     fun `cancelChoreNotification removes specific chore from scheduled notifications`() {
         // Given - multiple scheduled notifications
-        val futureDate = "2025-12-31T10:00:00Z"
+        val futureDate = "2035-12-31T10:00:00Z"
         val chores = listOf(
             ChoreItem(id = 1, name = "Chore 1", notification = true, isActive = true, nextDueDate = futureDate),
             ChoreItem(id = 2, name = "Chore 2", notification = true, isActive = true, nextDueDate = futureDate)
@@ -206,7 +206,7 @@ class ChoreNotificationManagerTest {
         assertEquals(0, choreNotificationManager.getScheduledNotificationCount())
 
         // When - schedule some notifications
-        val futureDate = "2025-12-31T10:00:00Z"
+        val futureDate = "2035-12-31T10:00:00Z"
         val chores = listOf(
             ChoreItem(id = 1, name = "Chore 1", notification = true, isActive = true, nextDueDate = futureDate),
             ChoreItem(id = 2, name = "Chore 2", notification = true, isActive = true, nextDueDate = futureDate)
@@ -220,7 +220,7 @@ class ChoreNotificationManagerTest {
     @Test
     fun `getScheduledNotificationIds returns correct IDs`() {
         // Given
-        val futureDate = "2025-12-31T10:00:00Z"
+        val futureDate = "2035-12-31T10:00:00Z"
         val chores = listOf(
             ChoreItem(id = 1, name = "Chore 1", notification = true, isActive = true, nextDueDate = futureDate),
             ChoreItem(id = 3, name = "Chore 3", notification = true, isActive = true, nextDueDate = futureDate)
@@ -276,7 +276,7 @@ class ChoreNotificationManagerTest {
     @Test
     fun `scheduleChoreNotifications with notification metadata`() {
         // Given - chore with notification metadata
-        val futureDate = "2025-12-31T10:00:00Z"
+        val futureDate = "2035-12-31T10:00:00Z"
         val chores = listOf(
             ChoreItem(
                 id = 1,
