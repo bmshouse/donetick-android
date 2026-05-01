@@ -148,6 +148,8 @@ class WebViewActivity : ComponentActivity() {
 
                 // Inject JavaScript to intercept API calls
                 injectApiInterceptorScript(view)
+                // Fix incorrect autocomplete attributes so password managers can detect the login form
+                injectAutofillFixScript(view)
             }
 
             override fun onReceivedError(
@@ -187,6 +189,28 @@ class WebViewActivity : ComponentActivity() {
                 title?.let { viewModel.updatePageTitle(it) }
             }
         }
+    }
+
+    /**
+     * Fixes DoneTick's non-standard autocomplete="password" attribute.
+     * The HTML spec requires "current-password"; without it Bitwarden and the
+     * Android Autofill Framework won't recognise the field as a login form.
+     * A MutationObserver keeps the fix applied across React re-renders.
+     */
+    private fun injectAutofillFixScript(webView: WebView?) {
+        val script = """
+            (function() {
+                function fixAutocomplete() {
+                    document.querySelectorAll('input[autocomplete="password"]').forEach(function(el) {
+                        el.setAttribute('autocomplete', 'current-password');
+                    });
+                }
+                fixAutocomplete();
+                new MutationObserver(fixAutocomplete)
+                    .observe(document.documentElement, { childList: true, subtree: true });
+            })();
+        """.trimIndent()
+        webView?.evaluateJavascript(script, null)
     }
 
     /**
