@@ -1,6 +1,8 @@
 package com.donetick.app.ui.webview
 
+import android.os.Build
 import android.util.Log
+import android.view.View
 import android.webkit.WebView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -88,6 +90,11 @@ class WebViewViewModel @Inject constructor(
                 displayZoomControls = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
+            }
+
+            // Enable autofill so password managers can detect the login form
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                wv.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
             }
 
             // Load the server URL
