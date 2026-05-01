@@ -96,6 +96,9 @@ class WebViewViewModel @Inject constructor(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 wv.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
             }
+            // Expose virtual view structure to accessibility-based password managers (Bitwarden, 1Password, etc.)
+            wv.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            wv.requestFocus()
 
             // Load the server URL
             val serverUrl = _uiState.value.serverUrl
