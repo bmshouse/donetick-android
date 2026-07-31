@@ -22,11 +22,11 @@ if (hasSigningConfig) {
 }
 
 android {
-    namespace = "com.donetick.app"
+    namespace = "org.chaosorderx.donetick"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.donetick.app"
+        applicationId = "org.chaosorderx.donetick"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
