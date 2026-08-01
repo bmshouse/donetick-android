@@ -28,26 +28,22 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test
 
-      - name: Generate debug keystore
+      - name: Set up release signing config
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          mkdir -p ~/.android
-          keytool -genkey -v \
-            -keystore ~/.android/debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > donetick-release-key.keystore
+          echo "storePassword=$RELEASE_KEYSTORE_PASSWORD" > signing.properties
+          echo "keyPassword=$RELEASE_KEY_PASSWORD" >> signing.properties
 
       - name: Build release APK
-        run: |
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=androiddebugkey \
-            -Pandroid.injected.signing.key.password=android
+        run: ./gradlew assembleRelease
+
+      - name: Remove signing files
+        if: always()
+        run: rm -f donetick-release-key.keystore signing.properties
 
       - name: Get version name
         id: get_version
