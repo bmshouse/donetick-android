@@ -4,19 +4,14 @@ A Kotlin Android application that serves as a thin wrapper for DoneTick server i
 
 ## Features
 
-- **Initial Setup Screen**: Configure DoneTick server URL on first launch with validation
-- **URL Validation**: Comprehensive server URL validation and connectivity testing
+- **Initial Setup Screen**: Configure DoneTick server URL on first launch, with validation and connectivity testing
 - **WebView Integration**: Full DoneTick server interface through WebView with JavaScript support
-- **Chores Management**: Dedicated chores list view with notification management
+- **Chores Management**: Dedicated chores list view with native Android notification scheduling
 - **API Interception**: Automatic capture of chores data from DoneTick server API calls
-- **Android Notifications**: Native Android notifications for chore reminders with scheduling
-- **Secure Storage**: Server URL stored securely using EncryptedSharedPreferences
-- **Settings Management**: Change server URL and manage configuration with confirmation dialogs
-- **Material Design 3**: Modern UI following Material Design guidelines with dynamic theming
-- **MVVM Architecture**: Clean architecture with ViewModels and StateFlow for reactive updates
-- **Error Handling**: Comprehensive error handling with user-friendly messages
-- **Network Awareness**: Network connectivity checks and appropriate error messages
-- **Two-View Architecture**: Separate WebView and ChoresList activities for clean navigation
+- **Secure Storage**: Server URL stored using Android Keystore-backed encryption
+- **Settings Management**: Change server URL or reset configuration with confirmation dialogs
+
+See [Architecture](#architecture) and [Technology Stack](#technology-stack) below for implementation details.
 
 ## Architecture
 
@@ -48,7 +43,7 @@ The app uses a two-activity architecture:
 - **Jetpack Compose**: Modern declarative UI toolkit
 - **Material Design 3**: UI design system with dynamic colors
 - **Hilt**: Dependency injection framework
-- **EncryptedSharedPreferences**: Secure local storage for sensitive data
+- **Android Keystore**: Secure, encrypted local storage for sensitive data
 - **WebView**: DoneTick server interface with enhanced configuration
 - **StateFlow**: Reactive state management
 - **JUnit & Mockito**: Unit testing framework
@@ -57,7 +52,7 @@ The app uses a two-activity architecture:
 
 ```
 app/
-├── src/main/java/com/donetick/app/
+├── src/main/java/org/chaosorderx/donetick/
 │   ├── data/
 │   │   ├── model/          # Data models (ServerConfig)
 │   │   ├── preferences/    # Secure preferences management
@@ -81,9 +76,9 @@ app/
 ## Getting Started
 
 ### Prerequisites
-- Android Studio Hedgehog or later
+- Android Studio (latest stable release recommended)
 - Android SDK API 24+ (Android 7.0)
-- Kotlin 1.9.20+
+- Kotlin 2.2.0+
 
 ### Setup Instructions
 1. Clone the repository
@@ -115,10 +110,22 @@ app/
 
 ## Configuration
 
-The app stores the server configuration securely using Android's EncryptedSharedPreferences. The configuration includes:
+The app stores the server configuration securely using Android Keystore-backed encryption. The configuration includes:
 - Server URL (encrypted)
 - Configuration status
 - Last validation timestamp
+
+### Login / Session Expiration
+
+This app has no auth logic of its own — it's a thin WebView wrapper, so how often you have to log back in is controlled entirely by your DoneTick **server's** JWT settings, not the app. If you're getting logged out every few days, raise these on the server (`config.yaml` or `DT_`-prefixed env vars):
+
+```yaml
+jwt:
+  session_time: 168h   # DT_JWT_SESSION_TIME — session length before re-auth is required (default 7 days)
+  max_refresh: 1440h   # DT_JWT_MAX_REFRESH — max time a session can silently refresh (default 60 days)
+```
+
+Increase both (e.g. `720h`/`2160h`) and restart the server to stay logged in longer.
 
 ## Error Handling
 
@@ -137,12 +144,10 @@ The project includes unit tests for:
 - Error handling scenarios
 - URL validation functionality
 
-Run tests with: `./gradlew test`
-
 ## Requirements
 
 - **Minimum SDK**: API 24 (Android 7.0)
-- **Target SDK**: API 34 (Android 14)
+- **Target SDK**: API 35 (Android 15)
 - **Internet Permission**: Required for server communication
 - **Network State Permission**: For connectivity checks
 - **Valid DoneTick Server**: The app requires a running DoneTick server instance
