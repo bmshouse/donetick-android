@@ -1,8 +1,10 @@
 name: Android CI
 
+# Runs on PRs only. Branch protection requires this check to pass and the PR
+# branch to be up to date with main before merging, so the merged commit is
+# already validated - re-running on push to main would be redundant. The
+# Android Release workflow handles the post-merge build.
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
