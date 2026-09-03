@@ -1,6 +1,6 @@
 # DoneTick Android Application
 
-A Kotlin Android application that serves as a thin wrapper for DoneTick server instances, providing a native mobile interface through WebView integration.
+A Kotlin Android application that serves as a thin wrapper for DoneTick server instances, providing a native mobile interface through WebView integration. Unlike the official DoneTick app, it works over plain HTTP — no SSL/TLS certificate required.
 
 ## Features
 
@@ -10,6 +10,7 @@ A Kotlin Android application that serves as a thin wrapper for DoneTick server i
 - **API Interception**: Automatic capture of chores data from DoneTick server API calls
 - **Secure Storage**: Server URL stored using Android Keystore-backed encryption
 - **Settings Management**: Change server URL or reset configuration with confirmation dialogs
+- **No SSL/TLS Required**: Connects to self-hosted servers over plain HTTP, unlike the official DoneTick app
 
 See [Architecture](#architecture) and [Technology Stack](#technology-stack) below for implementation details.
 
@@ -150,7 +151,7 @@ The project includes unit tests for:
 - **Target SDK**: API 35 (Android 15)
 - **Internet Permission**: Required for server communication
 - **Network State Permission**: For connectivity checks
-- **Valid DoneTick Server**: The app requires a running DoneTick server instance
+- **Valid DoneTick Server**: The app requires a running DoneTick server instance (HTTP or HTTPS — no certificate needed)
 
 ## Contributing
 

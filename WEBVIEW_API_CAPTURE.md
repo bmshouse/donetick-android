@@ -36,6 +36,8 @@ inner class ApiDataCapture {
 ### 2. JavaScript Injection
 
 When the WebView page finishes loading, the app injects JavaScript code that:
+- Performs an **active pull** of `GET /api/v1/chores/` and hands the response to
+  the Android app (see "Active pull" below)
 - Intercepts `fetch()` API calls
 - Intercepts `XMLHttpRequest` calls
 - Checks if the URL contains `/api/v1/chores`
@@ -43,27 +45,66 @@ When the WebView page finishes loading, the app injects JavaScript code that:
 - Captures the JSON response for list calls and sends it to the Android app
 - Handles individual chore actions (like marking done) separately
 
+### Active pull (why passive interception is not enough)
+
+Newer DoneTick frontends adopted an **offline-first sync engine**: the chores list
+is hydrated from IndexedDB and refreshed via `GET /api/v1/sync/changes?since=<cursor>`
+(a delta feed), so `GET /api/v1/chores/` is only called on a cold cache. That means
+the passive `fetch`/XHR hooks almost never see a chores-list response anymore, and
+without one the native chores list stays empty and no notifications are scheduled.
+
+To stay robust against frontend changes, the injected script calls `/api/v1/chores/`
+itself (`window.__dtRefreshChores()`), reusing the page's auth: the JWT from
+`localStorage['token']` as a `Bearer` header, plus `credentials: 'include'`. The
+base URL is `localStorage['customServerUrl']` (if set) or `window.location.origin`,
+with `/api/v1` appended. The endpoint still returns `{ res: [...] }`, which the
+existing `WebViewViewModel.handleChoresData()` already parses.
+
+The pull runs:
+- once on every `onPageFinished`
+- debounced, whenever the frontend calls `/sync/changes`, an `/auth/` endpoint, or a
+  per-chore action (`/do`, `/skip`, `/archive`, ...) — this covers the case where the
+  user logs in *after* the page finished loading and `onPageFinished` never fires again
+
+`window.__dtInterceptorInstalled` guards against stacking `fetch`/XHR wrappers when
+`onPageFinished` fires multiple times for one document.
+
+**Limitation:** the pull only runs while the WebView is loaded/foregrounded. Refreshing
+notifications while the app is closed would require a native API client on a background
+schedule (not currently implemented).
+
 ```javascript
 // Injected JavaScript (simplified)
+
+// Active pull - the primary source of chores data
+window.__dtRefreshChores = async function() {
+    const token = localStorage.getItem('token');
+    const res = await originalFetch(apiBase + '/chores/', {
+        headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+        credentials: 'include',
+    });
+    if (res.ok) {
+        AndroidApiCapture.onChoresDataReceived(await res.text());
+    }
+};
+
+// Passive hooks - still catch /chores/ when offline mode is disabled,
+// and trigger a debounced __dtRefreshChores() after sync/auth/chore actions
 window.fetch = function(...args) {
-    const url = args[0];
+    const url = __dtUrlString(args[0]); // tolerates string | Request | URL
 
     return originalFetch.apply(this, args)
         .then(response => {
-            // Only capture the exact chores list API call (not history, labels, etc.)
             if (url.match(/\/api\/v1\/chores\/?(\?.*)?$/)) {
-                const clonedResponse = response.clone();
-                clonedResponse.json().then(data => {
-                    AndroidApiCapture.onChoresDataReceived(JSON.stringify(data));
+                response.clone().text().then(text => {
+                    AndroidApiCapture.onChoresDataReceived(text);
                 });
             }
-            // Handle chore "do" actions separately
-            else if (url.includes('/do') && url.match(/\/api\/v1\/chores\/\d+\/do/)) {
-                const choreIdMatch = url.match(/\/api\/v1\/chores\/(\d+)\/do/);
-                if (choreIdMatch && choreIdMatch[1]) {
-                    AndroidApiCapture.onChoreMarkedDone(parseInt(choreIdMatch[1]));
-                }
+            else if (url.match(/\/api\/v1\/chores\/(\d+)\/do/)) {
+                const m = url.match(/\/api\/v1\/chores\/(\d+)\/do/);
+                if (m && m[1]) AndroidApiCapture.onChoreMarkedDone(parseInt(m[1]));
             }
+            __dtMaybeTriggerRefresh(url); // sync/changes, /auth/, per-chore actions
             return response;
         });
 };
@@ -143,3 +184,5 @@ The implementation now intelligently filters API calls to prevent notification i
 
 - Add support for more API endpoints (users, tasks, etc.)
 - Implement offline caching of captured data
+- Native API client on a background schedule (WorkManager) so notifications
+  refresh even when the app is closed, instead of only while the WebView is open
