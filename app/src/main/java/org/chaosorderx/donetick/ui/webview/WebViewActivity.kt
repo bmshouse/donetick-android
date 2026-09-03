@@ -195,53 +195,120 @@ class WebViewActivity : ComponentActivity() {
     private fun injectApiInterceptorScript(webView: WebView?) {
         val script = """
             (function() {
+                // The interceptor only needs to wrap fetch/XHR once per document.
+                // onPageFinished can fire more than once for the same page, and
+                // re-wrapping would stack wrappers. The active pull, however, should
+                // run on every onPageFinished so a fresh page load re-syncs chores.
+                if (window.__dtInterceptorInstalled) {
+                    if (typeof window.__dtRefreshChores === 'function') {
+                        window.__dtRefreshChores();
+                    }
+                    return;
+                }
+                window.__dtInterceptorInstalled = true;
+
                 // Store original fetch function
                 const originalFetch = window.fetch;
 
+                function __dtUrlString(u) {
+                    if (typeof u === 'string') return u;
+                    if (u && typeof u.url === 'string') return u.url;
+                    if (u && typeof u.href === 'string') return u.href;
+                    return '';
+                }
+
+                function __dtApiBase() {
+                    var customBase = null;
+                    try { customBase = localStorage.getItem('customServerUrl'); } catch (e) {}
+                    var base = (customBase && customBase.trim()) ? customBase.trim() : window.location.origin;
+                    return base.replace(/\/+$/, '') + '/api/v1';
+                }
+
+                // Active chores pull.
+                //
+                // Newer DoneTick frontends moved to an offline-first sync engine
+                // (GET /api/v1/sync/changes + IndexedDB) and no longer call
+                // GET /api/v1/chores/ on every load, so the passive hooks below
+                // rarely fire. Pull the full list directly and hand it to the same
+                // Android handler; /api/v1/chores/ still returns { res: [...] }.
+                // Uses originalFetch so it does not re-enter our own wrapper.
+                window.__dtRefreshChores = async function() {
+                    try {
+                        var token = null;
+                        try { token = localStorage.getItem('token'); } catch (e) {}
+                        var headers = { 'Accept': 'application/json' };
+                        if (token) { headers['Authorization'] = 'Bearer ' + token; }
+
+                        var res = await originalFetch(__dtApiBase() + '/chores/', {
+                            method: 'GET',
+                            headers: headers,
+                            credentials: 'include'
+                        });
+                        if (!res || !res.ok) {
+                            console.log('dtRefreshChores: skipped, status', res && res.status);
+                            return;
+                        }
+                        var text = await res.text();
+                        try {
+                            AndroidApiCapture.onChoresDataReceived(text);
+                        } catch (e) {
+                            console.error('dtRefreshChores: bridge error', e);
+                        }
+                    } catch (e) {
+                        console.log('dtRefreshChores: error', e);
+                    }
+                };
+
+                // Debounced trigger: several events in quick succession collapse
+                // into a single pull.
+                var __dtRefreshTimer = null;
+                function __dtScheduleRefresh() {
+                    if (__dtRefreshTimer) return;
+                    __dtRefreshTimer = setTimeout(function() {
+                        __dtRefreshTimer = null;
+                        window.__dtRefreshChores();
+                    }, 800);
+                }
+
+                // Re-pull whenever the frontend does something that changes chore
+                // state or auth: a sync, a login, or a per-chore action. This covers
+                // the "logged in after the page finished loading" case where
+                // onPageFinished never fires again.
+                function __dtMaybeTriggerRefresh(url) {
+                    if (!url) return;
+                    if (url.match(/\/api\/v1\/sync\/changes/) ||
+                        url.match(/\/api\/v1\/auth\//) ||
+                        url.match(/\/api\/v[i1]\/chores\/\d+\/(do|skip|complete|archive|start|pause|update)/)) {
+                        __dtScheduleRefresh();
+                    }
+                }
+
                 // Override fetch to intercept API calls
                 window.fetch = function(...args) {
-                    const url = args[0];
-
-                    // Log all API calls for debugging
-                    if (url.includes('/api/')) {
-                        console.log('API call detected:', url);
-                    }
+                    const url = __dtUrlString(args[0]);
 
                     return originalFetch.apply(this, args)
                         .then(response => {
-                            // Check if this is exactly the chores list API call
-                            if (url.match(/\/api\/v[i1]\/chores\/?(\?.*)?$/)) {
-                                // Clone response to avoid consuming it
-                                const clonedResponse = response.clone();
-
-                                clonedResponse.json().then(data => {
-                                    try {
-                                        // Send data to Android
-                                        AndroidApiCapture.onChoresDataReceived(JSON.stringify(data));
-                                    } catch (e) {
-                                        console.error('Error sending chores data to Android:', e);
-                                    }
-                                }).catch(e => {
-                                    console.error('Error parsing chores JSON:', e);
-                                });
-                            }
-                            // Check if this is a chore "do" action (be more specific to avoid history)
-                            else if (url.includes('/do') && (url.match(/\/api\/v[i1]\/chores\/\d+\/do/))) {
-                                console.log('Detected chore do action for URL:', url);
-                                // Extract chore ID from URL pattern /api/v1/chores/:id/do
-                                const choreIdMatch = url.match(/\/api\/v[i1]\/chores\/(\d+)\/do/);
-                                if (choreIdMatch && choreIdMatch[1]) {
-                                    console.log('Extracted chore ID:', choreIdMatch[1]);
-                                    try {
-                                        AndroidApiCapture.onChoreMarkedDone(parseInt(choreIdMatch[1]));
-                                    } catch (e) {
-                                        console.error('Error notifying Android of chore done:', e);
-                                    }
-                                } else {
-                                    console.log('Failed to extract chore ID from URL:', url);
+                            try {
+                                // Exact chores list call (still works when offline mode is off)
+                                if (url.match(/\/api\/v[i1]\/chores\/?(\?.*)?$/)) {
+                                    response.clone().text().then(text => {
+                                        try { AndroidApiCapture.onChoresDataReceived(text); }
+                                        catch (e) { console.error('Error sending chores data to Android:', e); }
+                                    }).catch(e => console.error('Error reading chores response:', e));
                                 }
+                                // Chore "do" action -> cancel that chore's notification
+                                else if (url.match(/\/api\/v[i1]\/chores\/(\d+)\/do/)) {
+                                    const m = url.match(/\/api\/v[i1]\/chores\/(\d+)\/do/);
+                                    if (m && m[1]) {
+                                        try { AndroidApiCapture.onChoreMarkedDone(parseInt(m[1])); }
+                                        catch (e) { console.error('Error notifying Android of chore done:', e); }
+                                    }
+                                }
+                                __dtMaybeTriggerRefresh(url);
+                            } catch (e) {
+                                console.error('dt fetch hook error:', e);
                             }
-
                             return response;
                         });
                 };
@@ -250,44 +317,33 @@ class WebViewActivity : ComponentActivity() {
                 const originalXHROpen = XMLHttpRequest.prototype.open;
                 const originalXHRSend = XMLHttpRequest.prototype.send;
 
-                XMLHttpRequest.prototype.open = function(method, url, ...args) {
-                    this._url = url;
-                    return originalXHROpen.apply(this, [method, url, ...args]);
+                XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                    this._url = __dtUrlString(url);
+                    return originalXHROpen.apply(this, [method, url, ...rest]);
                 };
 
                 XMLHttpRequest.prototype.send = function(...args) {
                     this.addEventListener('load', function() {
-                        if (this._url) {
-                            // Check if this is exactly the chores list API call
-                            if (this._url.match(/\/api\/v[i1]\/chores\/?(\?.*)?$/)) {
-                                try {
-                                    const data = JSON.parse(this.responseText);
-                                    AndroidApiCapture.onChoresDataReceived(JSON.stringify(data));
-                                } catch (e) {
-                                    console.error('Error parsing chores JSON from XHR:', e);
-                                }
+                        try {
+                            const u = this._url;
+                            if (!u) return;
+                            if (u.match(/\/api\/v[i1]\/chores\/?(\?.*)?$/)) {
+                                AndroidApiCapture.onChoresDataReceived(this.responseText);
                             }
-                            // Check if this is a chore "do" action (be more specific)
-                            else if (this._url.includes('/do') && this._url.match(/\/api\/v[i1]\/chores\/\d+\/do/)) {
-                                console.log('XHR: Detected chore do action for URL:', this._url);
-                                // Extract chore ID from URL pattern /api/v1/chores/:id/do
-                                const choreIdMatch = this._url.match(/\/api\/v[i1]\/chores\/(\d+)\/do/);
-                                if (choreIdMatch && choreIdMatch[1]) {
-                                    console.log('XHR: Extracted chore ID:', choreIdMatch[1]);
-                                    try {
-                                        AndroidApiCapture.onChoreMarkedDone(parseInt(choreIdMatch[1]));
-                                    } catch (e) {
-                                        console.error('Error notifying Android of chore done from XHR:', e);
-                                    }
-                                } else {
-                                    console.log('XHR: Failed to extract chore ID from URL:', this._url);
-                                }
+                            else if (u.match(/\/api\/v[i1]\/chores\/(\d+)\/do/)) {
+                                const m = u.match(/\/api\/v[i1]\/chores\/(\d+)\/do/);
+                                if (m && m[1]) { AndroidApiCapture.onChoreMarkedDone(parseInt(m[1])); }
                             }
+                            __dtMaybeTriggerRefresh(u);
+                        } catch (e) {
+                            console.error('dt xhr hook error:', e);
                         }
                     });
-
                     return originalXHRSend.apply(this, args);
                 };
+
+                // Initial pull for this page load.
+                window.__dtRefreshChores();
             })();
         """.trimIndent()
 
