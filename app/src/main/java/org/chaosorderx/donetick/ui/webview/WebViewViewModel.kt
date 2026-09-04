@@ -6,18 +6,32 @@ import android.view.View
 import android.webkit.WebView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import org.chaosorderx.donetick.data.mapper.ChoreJsonMapper
+import org.chaosorderx.donetick.data.sync.ChoreSyncCoordinator
 import org.chaosorderx.donetick.domain.usecase.CheckServerConnectivityUseCase
 import org.chaosorderx.donetick.domain.usecase.GetServerConfigUseCase
 import org.chaosorderx.donetick.notification.ChoreNotificationManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.lang.ref.WeakReference
 import javax.inject.Inject
+import kotlin.coroutines.resume
+
+/**
+ * Reads the Donetick JWT out of the WebView's page storage. The app stays a thin wrapper:
+ * the user logs in normally in the WebView, and native sync borrows that token.
+ */
+interface JwtReader {
+    suspend fun read(): String?
+}
 
 /**
  * ViewModel for the WebView screen
@@ -26,8 +40,14 @@ import javax.inject.Inject
 class WebViewViewModel @Inject constructor(
     private val getServerConfigUseCase: GetServerConfigUseCase,
     private val checkServerConnectivityUseCase: CheckServerConnectivityUseCase,
-    private val choreNotificationManager: ChoreNotificationManager
+    private val choreNotificationManager: ChoreNotificationManager,
+    private val choreSyncCoordinator: ChoreSyncCoordinator
 ) : ViewModel() {
+
+    private companion object {
+        const val TAG = "WebViewViewModel"
+        const val AUTH_ACTIVITY_DEBOUNCE_MS = 800L
+    }
 
     private val _uiState = MutableStateFlow(WebViewUiState.initial())
     val uiState: StateFlow<WebViewUiState> = _uiState.asStateFlow()
@@ -36,6 +56,12 @@ class WebViewViewModel @Inject constructor(
     val navigationEvent: StateFlow<WebViewNavigationEvent?> = _navigationEvent.asStateFlow()
 
     private var webView: WeakReference<WebView>? = null
+
+    /** Overridable for tests; the production reader is installed in [setWebView]. */
+    var jwtReader: JwtReader? = null
+
+    private var syncJob: Job? = null
+    private var lastScheduledChores: List<ChoreItem> = emptyList()
 
     init {
         loadServerConfig()
@@ -70,8 +96,30 @@ class WebViewViewModel @Inject constructor(
      * Sets the WebView instance
      */
     fun setWebView(webView: WebView) {
-        this.webView = WeakReference(webView)
+        val ref = WeakReference(webView)
+        this.webView = ref
+        if (jwtReader == null) jwtReader = WebViewJwtReader(ref)
         setupWebView()
+    }
+
+    /** Reads `localStorage['token']` from the page on the main thread. */
+    private class WebViewJwtReader(
+        private val webViewRef: WeakReference<WebView>
+    ) : JwtReader {
+        override suspend fun read(): String? = withContext(Dispatchers.Main) {
+            val wv = webViewRef.get() ?: return@withContext null
+            suspendCancellableCoroutine { cont ->
+                wv.evaluateJavascript(
+                    "(function(){try{return localStorage.getItem('token')}catch(e){return null}})()"
+                ) { raw ->
+                    val token = raw
+                        ?.trim()
+                        ?.removeSurrounding("\"")
+                        ?.takeIf { it.isNotEmpty() && it != "null" }
+                    cont.resume(token)
+                }
+            }
+        }
     }
 
     /**
@@ -222,29 +270,48 @@ class WebViewViewModel @Inject constructor(
         }
     }
 
+    /** Called from `WebViewClient.onPageFinished`. */
+    fun onWebViewPageFinished() = triggerSync()
+
     /**
-     * Handles chores data received from WebView JavaScript
+     * Called when the injected JS sees the frontend hit an `/auth/` endpoint — covers logging
+     * in without a full page reload, where [onWebViewPageFinished] never fires again.
      */
-    fun handleChoresData(jsonData: String) {
-        try {
-            // Check if this is the same data we already processed
-            val currentData = _uiState.value.choresData
-            if (currentData == jsonData) {
-                return
+    fun onWebAuthActivity() = triggerSync(debounceMs = AUTH_ACTIVITY_DEBOUNCE_MS)
+
+    /**
+     * Pulls the sync delta from the server (JWT borrowed from the WebView), updates the chores
+     * list, and reschedules notifications when the notifiable set actually changed. Foreground only.
+     */
+    private fun triggerSync(debounceMs: Long = 0L) {
+        if (syncJob?.isActive == true) return
+        syncJob = viewModelScope.launch {
+            if (debounceMs > 0L) delay(debounceMs)
+            val token = jwtReader?.read()
+            if (token.isNullOrEmpty()) {
+                Log.d(TAG, "Sync skipped: no auth token yet (user not logged in)")
+                return@launch
             }
-
-            val choresList = parseChoresJson(jsonData)
-
-            _uiState.value = _uiState.value.copy(
-                choresData = jsonData,
-                choresList = choresList
-            )
-
-            // Schedule notifications for chores with notification enabled
-            scheduleChoreNotifications(choresList)
-
-        } catch (e: Exception) {
-            Log.e("WebViewViewModel", "Error parsing chores data", e)
+            when (val outcome = choreSyncCoordinator.sync(token)) {
+                is ChoreSyncCoordinator.Outcome.Success -> {
+                    // The sync feed is the whole circle; the UI and the scheduler only care
+                    // about chores that will actually produce a notification. This mirrors
+                    // ChoreNotificationManager's own filter so the "Upcoming Notifications"
+                    // list matches the alarms that get set.
+                    val notifiable = ChoreJsonMapper.fromJsonList(outcome.chores)
+                        .filter { it.notification && it.isActive && it.nextDueDate != null }
+                    _uiState.value = _uiState.value.copy(choresList = notifiable)
+                    if (notifiable != lastScheduledChores) {
+                        scheduleChoreNotifications(notifiable)
+                        lastScheduledChores = notifiable
+                    }
+                }
+                ChoreSyncCoordinator.Outcome.Unauthorized ->
+                    Log.i(TAG, "Sync got 401; retrying with a refreshed token next cycle")
+                ChoreSyncCoordinator.Outcome.NoServer -> Unit
+                is ChoreSyncCoordinator.Outcome.Failed ->
+                    Log.w(TAG, "Sync failed", outcome.cause)
+            }
         }
     }
 
@@ -256,7 +323,7 @@ class WebViewViewModel @Inject constructor(
             try {
                 choreNotificationManager.scheduleChoreNotifications(chores)
             } catch (e: Exception) {
-                Log.e("WebViewViewModel", "Error scheduling notifications", e)
+                Log.e(TAG, "Error scheduling notifications", e)
             }
         }
     }
@@ -284,7 +351,7 @@ class WebViewViewModel @Inject constructor(
             updateChoreCompletionStatus(choreId)
 
         } catch (e: Exception) {
-            Log.e("WebViewViewModel", "Error handling chore marked done", e)
+            Log.e(TAG, "Error handling chore marked done", e)
         }
     }
 
@@ -302,50 +369,6 @@ class WebViewViewModel @Inject constructor(
         }
 
         _uiState.value = currentState.copy(choresList = updatedChoresList)
-    }
-
-    /**
-     * Parses the JSON chores data into ChoreItem objects
-     */
-    private fun parseChoresJson(jsonData: String): List<ChoreItem> {
-        return try {
-            val jsonObject = JSONObject(jsonData)
-            val resArray = jsonObject.optJSONArray("res") ?: JSONArray(jsonData)
-            val choresList = mutableListOf<ChoreItem>()
-
-            for (i in 0 until resArray.length()) {
-                val choreJson = resArray.getJSONObject(i)
-
-                // Parse notification metadata
-                val notificationMetadata = choreJson.optJSONObject("notificationMetadata")?.let { metadata ->
-                    NotificationMetadata(
-                        dueDate = metadata.optBoolean("dueDate", false)
-                    )
-                }
-
-                val chore = ChoreItem(
-                    id = choreJson.optInt("id", 0),
-                    name = choreJson.optString("name", ""),
-                    assignedTo = choreJson.optInt("assignedTo").takeIf { it != 0 },
-                    nextDueDate = choreJson.optString("nextDueDate").takeIf { it.isNotEmpty() },
-                    isCompleted = choreJson.optInt("status", 0) == 1, // Assuming status 1 means completed
-                    frequencyType = choreJson.optString("frequencyType").takeIf { it.isNotEmpty() },
-                    frequency = choreJson.optInt("frequency", 1),
-                    description = choreJson.optString("description").takeIf { it.isNotEmpty() },
-                    notification = choreJson.optBoolean("notification", false),
-                    notificationMetadata = notificationMetadata,
-                    isActive = choreJson.optBoolean("isActive", true),
-                    priority = choreJson.optInt("priority", 0)
-                )
-
-                choresList.add(chore)
-            }
-
-            choresList
-        } catch (e: Exception) {
-            Log.e("WebViewViewModel", "Error parsing chores JSON", e)
-            emptyList()
-        }
     }
 }
 

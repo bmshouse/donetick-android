@@ -15,14 +15,12 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.chaosorderx.donetick.R
+import org.chaosorderx.donetick.data.mapper.DueDateParser
 import org.chaosorderx.donetick.ui.MainActivity
 import org.chaosorderx.donetick.ui.webview.ChoreItem
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -97,7 +95,10 @@ class ChoreNotificationManager @Inject constructor(
      */
     private fun scheduleChoreNotification(chore: ChoreItem) {
         try {
-            val dueDate = parseIsoDate(chore.nextDueDate ?: return)
+            val dueDate = DueDateParser.toEpochMillis(chore.nextDueDate) ?: run {
+                Log.w(TAG, "Skipping chore '${chore.name}' (ID: ${chore.id}): unparseable nextDueDate '${chore.nextDueDate}'")
+                return
+            }
             val notificationTime = calculateNotificationTime(dueDate)
 
             Log.d(TAG, "Scheduling notification for chore '${chore.name}' (ID: ${chore.id}) due at ${Date(dueDate)}")
@@ -274,20 +275,6 @@ class ChoreNotificationManager @Inject constructor(
         // For now, show notification at the due time
         // You can customize this logic based on chore.notificationMetadata
         return dueDate
-    }
-
-    /**
-     * Parses ISO date string to timestamp
-     */
-    private fun parseIsoDate(dateString: String): Long {
-        return try {
-            val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-            format.timeZone = TimeZone.getTimeZone("UTC")
-            format.parse(dateString)?.time ?: 0L
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing date: $dateString", e)
-            0L
-        }
     }
 
     /**

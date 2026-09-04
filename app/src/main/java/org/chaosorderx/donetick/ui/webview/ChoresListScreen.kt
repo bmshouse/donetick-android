@@ -40,7 +40,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.chaosorderx.donetick.R
-import java.text.SimpleDateFormat
+import org.chaosorderx.donetick.data.mapper.DueDateParser
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 
@@ -272,19 +275,13 @@ private fun ChoreItemCard(
 }
 
 /**
- * Formats the due date string for display
+ * Formats the due date string for display, falling back to the raw string if it can't be parsed.
  */
 private fun formatDueDate(dueDateString: String): String? {
-    return try {
-        // Try to parse the date string and format it nicely
-        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX", Locale.getDefault())
-        val outputFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
-        val date = inputFormat.parse(dueDateString)
-        date?.let { outputFormat.format(it) }
-    } catch (e: Exception) {
-        // If parsing fails, return the original string
-        dueDateString
-    }
+    val millis = DueDateParser.toEpochMillis(dueDateString) ?: return dueDateString
+    return Instant.ofEpochMilli(millis)
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("MMM dd, yyyy", Locale.getDefault()))
 }
 
 /**

@@ -29,8 +29,8 @@ android {
         applicationId = "org.chaosorderx.donetick"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.0.8"
+        versionCode = 9
+        versionName = "1.0.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -65,6 +65,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        // Enables java.time (OffsetDateTime/Instant) on minSdk 24 for parsing
+        // the server's RFC3339 nextDueDate values. See DueDateParser.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlin {
@@ -139,7 +142,10 @@ dependencies {
     
     // Network
     implementation("androidx.browser:browser:1.8.0")
-    
+
+    // Core library desugaring - java.time backport for minSdk 24
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.18.0")

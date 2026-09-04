@@ -1,22 +1,22 @@
 package org.chaosorderx.donetick.ui.webview
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
-import org.chaosorderx.donetick.data.model.ServerConfig
-import org.chaosorderx.donetick.domain.usecase.CheckServerConnectivityUseCase
-import org.chaosorderx.donetick.domain.usecase.GetServerConfigUseCase
-import org.chaosorderx.donetick.notification.ChoreNotificationManager
 import io.mockk.coEvery
-import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import org.chaosorderx.donetick.data.model.ServerConfig
+import org.chaosorderx.donetick.data.sync.ChoreSyncCoordinator
+import org.chaosorderx.donetick.domain.usecase.CheckServerConnectivityUseCase
+import org.chaosorderx.donetick.domain.usecase.GetServerConfigUseCase
+import org.chaosorderx.donetick.notification.ChoreNotificationManager
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -36,296 +36,167 @@ class WebViewViewModelTest {
 
     private val testDispatcher = StandardTestDispatcher()
 
-    private lateinit var webViewViewModel: WebViewViewModel
-    private lateinit var mockGetServerConfigUseCase: GetServerConfigUseCase
-    private lateinit var mockCheckServerConnectivityUseCase: CheckServerConnectivityUseCase
-    private lateinit var mockChoreNotificationManager: ChoreNotificationManager
+    private lateinit var vm: WebViewViewModel
+    private lateinit var getServerConfig: GetServerConfigUseCase
+    private lateinit var checkConnectivity: CheckServerConnectivityUseCase
+    private lateinit var notifications: ChoreNotificationManager
+    private lateinit var coordinator: ChoreSyncCoordinator
+
+    private fun chore(
+        id: Int,
+        name: String = "c$id",
+        notification: Boolean = true,
+        isActive: Boolean = true,
+        nextDueDate: String? = "2035-01-01T00:00:00Z",
+    ) = JSONObject().put("id", id).put("name", name)
+        .put("notification", notification).put("isActive", isActive)
+        .apply { if (nextDueDate != null) put("nextDueDate", nextDueDate) }
+
+    private fun tokenReader(token: String?) = object : JwtReader {
+        override suspend fun read(): String? = token
+    }
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
 
-        mockGetServerConfigUseCase = mockk()
-        mockCheckServerConnectivityUseCase = mockk()
-        mockChoreNotificationManager = mockk(relaxed = true)
+        getServerConfig = mockk()
+        checkConnectivity = mockk()
+        notifications = mockk(relaxed = true)
+        coordinator = mockk()
 
-        // Setup default mock behavior
-        val defaultConfig = ServerConfig(
-            url = "https://example.com",
-            isConfigured = true,
-            lastValidated = System.currentTimeMillis()
-        )
-        coEvery { mockGetServerConfigUseCase.getCurrentConfig() } returns defaultConfig
+        coEvery { getServerConfig.getCurrentConfig() } returns
+            ServerConfig(url = "https://example.com", isConfigured = true, lastValidated = 1L)
 
-        webViewViewModel = WebViewViewModel(
-            mockGetServerConfigUseCase,
-            mockCheckServerConnectivityUseCase,
-            mockChoreNotificationManager
-        )
+        vm = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator)
+        vm.jwtReader = tokenReader("jwt-token")
     }
 
     @After
-    fun tearDown() {
-        Dispatchers.resetMain()
-    }
+    fun tearDown() = Dispatchers.resetMain()
 
     @Test
     fun `initial state is correct`() = runTest {
         advanceUntilIdle()
-        
-        val initialState = webViewViewModel.uiState.value
-        
-        assertFalse(initialState.isLoading)
-        assertNull(initialState.errorMessage)
-        assertEquals("https://example.com", initialState.serverUrl)
-        assertEquals("", initialState.pageTitle)
-        assertFalse(initialState.canGoBack)
-        assertEquals(0, initialState.progress)
-        assertNull(initialState.choresData)
-        assertTrue(initialState.choresList.isEmpty())
+        val s = vm.uiState.value
+        assertFalse(s.isLoading)
+        assertNull(s.errorMessage)
+        assertEquals("https://example.com", s.serverUrl)
+        assertTrue(s.choresList.isEmpty())
     }
 
     @Test
-    fun `loadServerConfig with unconfigured server navigates to setup`() = runTest {
-        // Given
-        val unconfiguredConfig = ServerConfig(url = "", isConfigured = false)
-        coEvery { mockGetServerConfigUseCase.getCurrentConfig() } returns unconfiguredConfig
+    fun `unconfigured server navigates to setup`() = runTest {
+        coEvery { getServerConfig.getCurrentConfig() } returns ServerConfig(url = "", isConfigured = false)
+        val viewModel = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator)
+        advanceUntilIdle()
+        assertTrue(viewModel.navigationEvent.value is WebViewNavigationEvent.NavigateToSetup)
+    }
 
-        // Create new ViewModel with unconfigured server
-        val viewModel = WebViewViewModel(
-            mockGetServerConfigUseCase,
-            mockCheckServerConnectivityUseCase,
-            mockChoreNotificationManager
-        )
+    @Test
+    fun `updateLoadingState, title, progress, canGoBack`() {
+        vm.updateLoadingState(true); assertTrue(vm.uiState.value.isLoading)
+        vm.updatePageTitle("T"); assertEquals("T", vm.uiState.value.pageTitle)
+        vm.updateProgress(75); assertEquals(75, vm.uiState.value.progress)
+        vm.updateCanGoBack(true); assertTrue(vm.uiState.value.canGoBack)
+    }
 
+    @Test
+    fun `page finished with no token does not sync or schedule`() = runTest {
+        vm.jwtReader = tokenReader(null)
+        vm.onWebViewPageFinished()
+        advanceUntilIdle()
+        verify(exactly = 0) { notifications.scheduleChoreNotifications(any()) }
+    }
+
+    @Test
+    fun `successful sync with changes updates list and schedules notifications`() = runTest {
+        coEvery { coordinator.sync("jwt-token") } returns
+            ChoreSyncCoordinator.Outcome.Success(listOf(chore(1, "Trash"), chore(2, "Dishes")), changed = true)
+
+        vm.onWebViewPageFinished()
         advanceUntilIdle()
 
-        // Then
-        val navigationEvent = viewModel.navigationEvent.value
-        assertTrue(navigationEvent is WebViewNavigationEvent.NavigateToSetup)
+        assertEquals(listOf("Trash", "Dishes"), vm.uiState.value.choresList.map { it.name })
+        verify { notifications.scheduleChoreNotifications(match { it.map { c -> c.id } == listOf(1, 2) }) }
     }
 
     @Test
-    fun `updateLoadingState updates loading state correctly`() {
-        webViewViewModel.updateLoadingState(true)
-        assertTrue(webViewViewModel.uiState.value.isLoading)
-        
-        webViewViewModel.updateLoadingState(false)
-        assertFalse(webViewViewModel.uiState.value.isLoading)
-    }
-
-    @Test
-    fun `updatePageTitle updates page title correctly`() {
-        val testTitle = "Test Page Title"
-        webViewViewModel.updatePageTitle(testTitle)
-        assertEquals(testTitle, webViewViewModel.uiState.value.pageTitle)
-    }
-
-    @Test
-    fun `updateProgress updates progress correctly`() {
-        val testProgress = 75
-        webViewViewModel.updateProgress(testProgress)
-        assertEquals(testProgress, webViewViewModel.uiState.value.progress)
-    }
-
-    @Test
-    fun `updateCanGoBack updates can go back state correctly`() {
-        webViewViewModel.updateCanGoBack(true)
-        assertTrue(webViewViewModel.uiState.value.canGoBack)
-        
-        webViewViewModel.updateCanGoBack(false)
-        assertFalse(webViewViewModel.uiState.value.canGoBack)
-    }
-
-    @Test
-    fun `handleChoresData with valid JSON parses chores correctly`() = runTest {
-        // Given
-        val jsonData = """
-            {
-                "res": [
-                    {
-                        "id": 1,
-                        "name": "Test Chore 1",
-                        "assignedTo": 123,
-                        "nextDueDate": "2024-01-15T10:00:00Z",
-                        "status": 0,
-                        "frequencyType": "daily",
-                        "frequency": 1,
-                        "description": "Test description",
-                        "notification": true,
-                        "notificationMetadata": {
-                            "dueDate": true
-                        },
-                        "isActive": true,
-                        "priority": 1
-                    },
-                    {
-                        "id": 2,
-                        "name": "Test Chore 2",
-                        "notification": false,
-                        "isActive": true
-                    }
-                ]
-            }
-        """.trimIndent()
-
-        // When
-        webViewViewModel.handleChoresData(jsonData)
-        advanceUntilIdle() // Wait for coroutines to complete
-
-        // Then
-        val state = webViewViewModel.uiState.value
-        assertEquals(jsonData, state.choresData)
-        assertEquals(2, state.choresList.size)
-
-        val chore1 = state.choresList[0]
-        assertEquals(1, chore1.id)
-        assertEquals("Test Chore 1", chore1.name)
-        assertEquals(123, chore1.assignedTo)
-        assertEquals("2024-01-15T10:00:00Z", chore1.nextDueDate)
-        assertFalse(chore1.isCompleted) // status 0 = not completed
-        assertEquals("daily", chore1.frequencyType)
-        assertEquals(1, chore1.frequency)
-        assertEquals("Test description", chore1.description)
-        assertTrue(chore1.notification)
-        assertTrue(chore1.notificationMetadata?.dueDate == true)
-        assertTrue(chore1.isActive)
-        assertEquals(1, chore1.priority)
-
-        val chore2 = state.choresList[1]
-        assertEquals(2, chore2.id)
-        assertEquals("Test Chore 2", chore2.name)
-        assertFalse(chore2.notification)
-        assertTrue(chore2.isActive)
-
-        // Verify notifications were scheduled
-        verify { mockChoreNotificationManager.scheduleChoreNotifications(state.choresList) }
-    }
-
-    @Test
-    fun `handleChoresData with array JSON parses chores correctly`() = runTest {
-        // Given - JSON array format instead of object with "res" property
-        val jsonData = """
-            [
-                {
-                    "id": 1,
-                    "name": "Test Chore",
-                    "notification": true,
-                    "isActive": true
-                }
-            ]
-        """.trimIndent()
-
-        // When
-        webViewViewModel.handleChoresData(jsonData)
-        advanceUntilIdle() // Wait for coroutines to complete
-
-        // Then
-        val state = webViewViewModel.uiState.value
-        // The current implementation has a bug where JSON arrays don't parse correctly
-        // The parseChoresJson method tries JSONObject(jsonData) first, which fails for arrays
-        // So it returns an empty list. This test documents the current behavior.
-        assertEquals(0, state.choresList.size)
-    }
-
-    @Test
-    fun `handleChoresData with duplicate data ignores duplicate`() = runTest {
-        // Given
-        val jsonData = """{"res": [{"id": 1, "name": "Test"}]}"""
-
-        // When - call twice with same data
-        webViewViewModel.handleChoresData(jsonData)
-        advanceUntilIdle() // Wait for first call to complete
-        val firstCallState = webViewViewModel.uiState.value
-
-        webViewViewModel.handleChoresData(jsonData)
-        advanceUntilIdle() // Wait for second call to complete
-        val secondCallState = webViewViewModel.uiState.value
-
-        // Then - state should be the same
-        assertEquals(firstCallState, secondCallState)
-
-        // Verify notifications were only scheduled once (second call should be ignored)
-        verify(exactly = 1) { mockChoreNotificationManager.scheduleChoreNotifications(any()) }
-    }
-
-    @Test
-    fun `handleChoresData with invalid JSON handles error gracefully`() = runTest {
-        // Given
-        val invalidJsonData = "invalid json data"
-
-        // When
-        webViewViewModel.handleChoresData(invalidJsonData)
-        advanceUntilIdle() // Wait for coroutines to complete
-
-        // Then - should not crash and should not update state
-        val state = webViewViewModel.uiState.value
-        // The implementation actually sets choresData even for invalid JSON, but choresList should be empty
-        assertTrue(state.choresList.isEmpty())
-    }
-
-    @Test
-    fun `onNotificationPermissionGranted reschedules notifications`() = runTest {
-        // Given - setup chores data first
-        val jsonData = """{"res": [{"id": 1, "name": "Test", "notification": true}]}"""
-        webViewViewModel.handleChoresData(jsonData)
-        advanceUntilIdle() // Wait for first scheduling to complete
-
-        // When
-        webViewViewModel.onNotificationPermissionGranted()
-        advanceUntilIdle() // Wait for rescheduling to complete
-
-        // Then - should reschedule notifications
-        verify(atLeast = 2) { mockChoreNotificationManager.scheduleChoreNotifications(any()) }
-    }
-
-    @Test
-    fun `handleChoreMarkedDone cancels notification and updates chore status`() {
-        // Given - setup chores data first
-        val jsonData = """
-            {"res": [
-                {"id": 1, "name": "Test Chore 1", "status": 0},
-                {"id": 2, "name": "Test Chore 2", "status": 0}
-            ]}
-        """.trimIndent()
-        webViewViewModel.handleChoresData(jsonData)
-        
-        // When
-        webViewViewModel.handleChoreMarkedDone(1)
-        
-        // Then
-        verify { mockChoreNotificationManager.cancelChoreNotification(1) }
-        
-        val state = webViewViewModel.uiState.value
-        val updatedChore = state.choresList.find { it.id == 1 }
-        assertTrue(updatedChore?.isCompleted == true)
-        
-        // Other chore should remain unchanged
-        val otherChore = state.choresList.find { it.id == 2 }
-        assertFalse(otherChore?.isCompleted == true)
-    }
-
-    @Test
-    fun `clearNavigationEvent clears navigation event`() = runTest {
-        // Given - trigger navigation event
-        val unconfiguredConfig = ServerConfig(url = "", isConfigured = false)
-        coEvery { mockGetServerConfigUseCase.getCurrentConfig() } returns unconfiguredConfig
-
-        val viewModel = WebViewViewModel(
-            mockGetServerConfigUseCase,
-            mockCheckServerConnectivityUseCase,
-            mockChoreNotificationManager
+    fun `non-notifiable chores are excluded from the list (stale one-offs, no due date, inactive)`() = runTest {
+        coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(
+            listOf(
+                chore(1, "Real"),
+                chore(2, "No due date", nextDueDate = null),
+                chore(3, "Completed one-off", isActive = false, nextDueDate = null),
+                chore(4, "Notifications off", notification = false),
+            ),
+            changed = true,
         )
 
+        vm.onWebViewPageFinished()
         advanceUntilIdle()
 
-        // Verify navigation event is set
+        assertEquals(listOf("Real"), vm.uiState.value.choresList.map { it.name })
+        verify { notifications.scheduleChoreNotifications(match { it.map { c -> c.id } == listOf(1) }) }
+    }
+
+    @Test
+    fun `unchanged sync after a first success does not reschedule`() = runTest {
+        coEvery { coordinator.sync(any()) } returnsMany listOf(
+            ChoreSyncCoordinator.Outcome.Success(listOf(chore(1)), changed = true),
+            ChoreSyncCoordinator.Outcome.Success(listOf(chore(1)), changed = false),
+        )
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        verify(exactly = 1) { notifications.scheduleChoreNotifications(any()) }
+    }
+
+    @Test
+    fun `unauthorized sync keeps the last-good list and does not crash`() = runTest {
+        coEvery { coordinator.sync(any()) } returnsMany listOf(
+            ChoreSyncCoordinator.Outcome.Success(listOf(chore(1, "Keep me")), changed = true),
+            ChoreSyncCoordinator.Outcome.Unauthorized,
+        )
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        assertEquals(listOf("Keep me"), vm.uiState.value.choresList.map { it.name })
+    }
+
+    @Test
+    fun `handleChoreMarkedDone cancels that chore's notification and marks it complete`() = runTest {
+        coEvery { coordinator.sync(any()) } returns
+            ChoreSyncCoordinator.Outcome.Success(listOf(chore(1), chore(2)), changed = true)
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        vm.handleChoreMarkedDone(1)
+
+        verify { notifications.cancelChoreNotification(1) }
+        assertTrue(vm.uiState.value.choresList.first { it.id == 1 }.isCompleted)
+        assertFalse(vm.uiState.value.choresList.first { it.id == 2 }.isCompleted)
+    }
+
+    @Test
+    fun `onNotificationPermissionGranted reschedules from the current list`() = runTest {
+        coEvery { coordinator.sync(any()) } returns
+            ChoreSyncCoordinator.Outcome.Success(listOf(chore(1)), changed = true)
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        vm.onNotificationPermissionGranted(); advanceUntilIdle()
+
+        verify(atLeast = 2) { notifications.scheduleChoreNotifications(any()) }
+    }
+
+    @Test
+    fun `clearNavigationEvent clears the event`() = runTest {
+        coEvery { getServerConfig.getCurrentConfig() } returns ServerConfig(url = "", isConfigured = false)
+        val viewModel = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator)
+        advanceUntilIdle()
         assertNotNull(viewModel.navigationEvent.value)
-
-        // When
         viewModel.clearNavigationEvent()
-
-        // Then
         assertNull(viewModel.navigationEvent.value)
     }
 }

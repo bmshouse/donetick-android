@@ -266,11 +266,10 @@ class ChoreNotificationManagerTest {
         // When
         choreNotificationManager.scheduleChoreNotifications(chores)
 
-        // Then - should not crash
-        // The implementation parses invalid dates as 0L (epoch), which is treated as an overdue chore
-        // So it will be tracked as an immediate notification
-        assertEquals(1, choreNotificationManager.getScheduledNotificationCount())
-        assertEquals(0, shadowAlarmManager.scheduledAlarms.size) // No future alarms scheduled
+        // Then - an unparseable nextDueDate is skipped entirely (no alarm, no immediate
+        // notification), rather than being treated as epoch 0 / "overdue now".
+        assertEquals(0, choreNotificationManager.getScheduledNotificationCount())
+        assertEquals(0, shadowAlarmManager.scheduledAlarms.size)
     }
 
     @Test
