@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import org.chaosorderx.donetick.data.mapper.ChoreJsonMapper
 import org.chaosorderx.donetick.ui.theme.DoneTickTheme
 import org.json.JSONArray
 import org.json.JSONObject
@@ -53,6 +54,7 @@ class ChoresListActivity : ComponentActivity() {
                     put("notification", chore.notification)
                     put("isActive", chore.isActive)
                     put("priority", chore.priority)
+                    put("status", chore.status)
                     chore.notificationMetadata?.let { metadata ->
                         put("notificationMetadata", JSONObject().apply {
                             put("dueDate", metadata.dueDate)
@@ -75,7 +77,7 @@ class ChoresListActivity : ComponentActivity() {
 
         // Get chores data from intent
         val choresData = intent.getStringExtra(EXTRA_CHORES_DATA) ?: ""
-        val choresList = parseChoresJson(choresData)
+        val choresList = ChoreJsonMapper.fromEnvelope(choresData)
 
         setContent {
             DoneTickTheme {
@@ -87,50 +89,4 @@ class ChoresListActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Parses the JSON chores data into ChoreItem objects
-     * This is a simplified version of the parsing logic from WebViewViewModel
-     */
-    private fun parseChoresJson(jsonData: String): List<ChoreItem> {
-        return try {
-            if (jsonData.isEmpty()) return emptyList()
-            
-            val jsonObject = JSONObject(jsonData)
-            val resArray = jsonObject.optJSONArray("res") ?: JSONArray(jsonData)
-            val choresList = mutableListOf<ChoreItem>()
-
-            for (i in 0 until resArray.length()) {
-                val choreJson = resArray.getJSONObject(i)
-                
-                val notificationMetadata = choreJson.optJSONObject("notificationMetadata")?.let { metadata ->
-                    NotificationMetadata(
-                        dueDate = metadata.optBoolean("dueDate", false)
-                    )
-                }
-
-                val chore = ChoreItem(
-                    id = choreJson.getInt("id"),
-                    name = choreJson.getString("name"),
-                    assignedTo = if (choreJson.has("assignedTo") && !choreJson.isNull("assignedTo")) {
-                        choreJson.getInt("assignedTo")
-                    } else null,
-                    nextDueDate = choreJson.optString("nextDueDate").takeIf { it.isNotEmpty() },
-                    isCompleted = choreJson.optBoolean("isCompleted", false),
-                    frequencyType = choreJson.optString("frequencyType").takeIf { it.isNotEmpty() },
-                    frequency = choreJson.optInt("frequency", 1),
-                    description = choreJson.optString("description").takeIf { it.isNotEmpty() },
-                    notification = choreJson.optBoolean("notification", false),
-                    notificationMetadata = notificationMetadata,
-                    isActive = choreJson.optBoolean("isActive", true),
-                    priority = choreJson.optInt("priority", 0)
-                )
-                choresList.add(chore)
-            }
-
-            choresList
-        } catch (e: Exception) {
-            android.util.Log.e("ChoresListActivity", "Error parsing chores JSON", e)
-            emptyList()
-        }
-    }
 }
