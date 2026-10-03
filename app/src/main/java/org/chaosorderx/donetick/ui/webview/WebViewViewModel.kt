@@ -42,11 +42,27 @@ interface JwtReader {
  * inside the page so the HttpOnly refresh cookie is sent exactly as the web client sends it.
  */
 interface SessionBridge {
-    /** Token expiry in epoch millis, or null if unknown / not logged in. */
-    suspend fun readTokenExpiryMillis(): Long?
+    /** Current session, or null if unknown / not logged in. */
+    suspend fun readSession(): SessionInfo?
 
-    /** Calls `/auth/refresh` and stores the new tokens; true on success. */
-    suspend fun refreshToken(): Boolean
+    /** Calls `/auth/refresh` and stores the new tokens. */
+    suspend fun refreshToken(): RefreshResult
+}
+
+/**
+ * [expiryMs] is when the access token expires. [canRefresh] is false when no refresh token
+ * was ever issued — servers without `/auth/refresh` (older DoneTick) never send one.
+ */
+data class SessionInfo(val expiryMs: Long, val canRefresh: Boolean)
+
+enum class RefreshResult {
+    SUCCESS,
+
+    /** No refresh token stored, or the server has no usable `/auth/refresh` (404/405/501). */
+    UNSUPPORTED,
+
+    /** Server reachable but refused, or the call failed / timed out. */
+    FAILED,
 }
 
 /**
@@ -74,7 +90,7 @@ class WebViewViewModel @Inject constructor(
             (async function() {
                 try {
                     var rt = localStorage.getItem('refresh_token');
-                    if (!rt) { AndroidApiCapture.onSessionRefreshed(false); return; }
+                    if (!rt) { AndroidApiCapture.onSessionRefreshed('unsupported'); return; }
                     var r = await fetch('/api/v1/auth/refresh', {
                         method: 'POST',
                         credentials: 'include',
@@ -84,18 +100,22 @@ class WebViewViewModel @Inject constructor(
                         },
                         body: JSON.stringify({ refresh_token: rt })
                     });
-                    if (!r.ok) { AndroidApiCapture.onSessionRefreshed(false); return; }
+                    if (!r.ok) {
+                        var gone = r.status === 404 || r.status === 405 || r.status === 501;
+                        AndroidApiCapture.onSessionRefreshed(gone ? 'unsupported' : 'failed');
+                        return;
+                    }
                     var j = await r.json();
                     var t = j.token || j.access_token;
-                    if (!t) { AndroidApiCapture.onSessionRefreshed(false); return; }
+                    if (!t) { AndroidApiCapture.onSessionRefreshed('failed'); return; }
                     localStorage.setItem('token', t);
                     var e = j.expire || j.access_token_expiry;
                     if (e) localStorage.setItem('token_expiry', e);
                     if (j.refresh_token) localStorage.setItem('refresh_token', j.refresh_token);
                     if (j.refresh_token_expiry) localStorage.setItem('refresh_token_expiry', j.refresh_token_expiry);
-                    AndroidApiCapture.onSessionRefreshed(true);
+                    AndroidApiCapture.onSessionRefreshed('ok');
                 } catch (err) {
-                    AndroidApiCapture.onSessionRefreshed(false);
+                    AndroidApiCapture.onSessionRefreshed('failed');
                 }
             })();
         """
@@ -115,7 +135,7 @@ class WebViewViewModel @Inject constructor(
     /** Overridable for tests; the production bridge is installed in [setWebView]. */
     var sessionBridge: SessionBridge? = null
 
-    private var pendingRefresh: CompletableDeferred<Boolean>? = null
+    private var pendingRefresh: CompletableDeferred<RefreshResult>? = null
 
     private var syncJob: Job? = null
     private var lastScheduledChores: List<ChoreItem> = emptyList()
@@ -184,31 +204,40 @@ class WebViewViewModel @Inject constructor(
     private inner class WebViewSessionBridge(
         private val webViewRef: WeakReference<WebView>
     ) : SessionBridge {
-        override suspend fun readTokenExpiryMillis(): Long? = withContext(Dispatchers.Main) {
+        override suspend fun readSession(): SessionInfo? = withContext(Dispatchers.Main) {
             val wv = webViewRef.get() ?: return@withContext null
             suspendCancellableCoroutine { cont ->
                 wv.evaluateJavascript(
-                    "(function(){try{return localStorage.getItem('token_expiry')}catch(e){return null}})()"
+                    "(function(){try{return (localStorage.getItem('token_expiry')||'')" +
+                        "+'|'+(localStorage.getItem('refresh_token')?'1':'0')}catch(e){return null}})()"
                 ) { raw ->
-                    val text = raw?.trim()?.removeSurrounding("\"")
-                    cont.resume(runCatching { Instant.parse(text).toEpochMilli() }.getOrNull())
+                    val parts = raw?.trim()?.removeSurrounding("\"")?.split('|')
+                    val expiry = parts?.getOrNull(0)
+                        ?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+                    cont.resume(expiry?.let { SessionInfo(it, canRefresh = parts[1] == "1") })
                 }
             }
         }
 
-        override suspend fun refreshToken(): Boolean {
-            val deferred = CompletableDeferred<Boolean>().also { pendingRefresh = it }
+        override suspend fun refreshToken(): RefreshResult {
+            val deferred = CompletableDeferred<RefreshResult>().also { pendingRefresh = it }
             withContext(Dispatchers.Main) {
                 webViewRef.get()?.evaluateJavascript(REFRESH_SCRIPT, null)
-                    ?: deferred.complete(false)
+                    ?: deferred.complete(RefreshResult.FAILED)
             }
-            return withTimeoutOrNull(REFRESH_TIMEOUT_MS) { deferred.await() } ?: false
+            return withTimeoutOrNull(REFRESH_TIMEOUT_MS) { deferred.await() } ?: RefreshResult.FAILED
         }
     }
 
-    /** Called by the JS bridge when the in-page refresh finishes. */
-    fun onSessionRefreshResult(success: Boolean) {
-        pendingRefresh?.complete(success)
+    /** Called by the JS bridge when the in-page refresh finishes (`ok` / `unsupported` / `failed`). */
+    fun onSessionRefreshResult(result: String) {
+        pendingRefresh?.complete(
+            when (result) {
+                "ok" -> RefreshResult.SUCCESS
+                "unsupported" -> RefreshResult.UNSUPPORTED
+                else -> RefreshResult.FAILED
+            }
+        )
     }
 
     /**
@@ -410,18 +439,20 @@ class WebViewViewModel @Inject constructor(
     /**
      * Keeps the login from lapsing. Opening the app inside the 5-day warning window refreshes
      * the token; either way the warning alarm is (re)armed for 5 days before the current expiry.
+     * If the server can't refresh (older DoneTick, or a session from before refresh tokens were
+     * captured), the warning tells the user to log in again instead of to open the app.
      */
     private suspend fun maintainSession() {
         val bridge = sessionBridge ?: return
-        var expiry = bridge.readTokenExpiryMillis() ?: return
-        if (System.currentTimeMillis() >= SessionExpiryNotifier.warnAt(expiry)) {
-            if (bridge.refreshToken()) {
-                expiry = bridge.readTokenExpiryMillis() ?: expiry
-            } else {
-                Log.w(TAG, "Session refresh failed; user must reopen or sign in again")
+        var session = bridge.readSession() ?: return
+        if (session.canRefresh && System.currentTimeMillis() >= SessionExpiryNotifier.warnAt(session.expiryMs)) {
+            when (bridge.refreshToken()) {
+                RefreshResult.SUCCESS -> session = bridge.readSession() ?: session
+                RefreshResult.UNSUPPORTED -> session = session.copy(canRefresh = false)
+                RefreshResult.FAILED -> Log.w(TAG, "Session refresh failed; will retry next time the app opens")
             }
         }
-        sessionExpiryNotifier.schedule(expiry)
+        sessionExpiryNotifier.schedule(session.expiryMs, session.canRefresh)
     }
 
     /**

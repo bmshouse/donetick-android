@@ -170,13 +170,18 @@ class WebViewViewModelTest {
         assertEquals(listOf("Keep me"), vm.uiState.value.choresList.map { it.name })
     }
 
-    private class FakeSession(var expiry: Long?, val refreshedExpiry: Long? = null, val refreshOk: Boolean = true) : SessionBridge {
+    private class FakeSession(
+        var expiry: Long?,
+        val refreshedExpiry: Long? = null,
+        val result: RefreshResult = RefreshResult.SUCCESS,
+        val canRefresh: Boolean = true,
+    ) : SessionBridge {
         var refreshCalls = 0
-        override suspend fun readTokenExpiryMillis(): Long? = expiry
-        override suspend fun refreshToken(): Boolean {
+        override suspend fun readSession(): SessionInfo? = expiry?.let { SessionInfo(it, canRefresh) }
+        override suspend fun refreshToken(): RefreshResult {
             refreshCalls++
-            if (refreshOk && refreshedExpiry != null) expiry = refreshedExpiry
-            return refreshOk
+            if (result == RefreshResult.SUCCESS && refreshedExpiry != null) expiry = refreshedExpiry
+            return result
         }
     }
 
@@ -192,7 +197,7 @@ class WebViewViewModelTest {
         vm.onWebViewPageFinished(); advanceUntilIdle()
 
         assertEquals(0, session.refreshCalls)
-        verify { sessionNotifier.schedule(expiry) }
+        verify { sessionNotifier.schedule(expiry, true) }
     }
 
     @Test
@@ -205,20 +210,45 @@ class WebViewViewModelTest {
         vm.onWebViewPageFinished(); advanceUntilIdle()
 
         assertEquals(1, session.refreshCalls)
-        verify { sessionNotifier.schedule(newExpiry) }
+        verify { sessionNotifier.schedule(newExpiry, true) }
     }
 
     @Test
     fun `failed refresh inside the window keeps the old expiry so the warning shows`() = runTest {
         val expiry = System.currentTimeMillis() + 2 * day
-        val session = FakeSession(expiry, refreshOk = false)
+        val session = FakeSession(expiry, result = RefreshResult.FAILED)
         vm.sessionBridge = session
         coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(emptyList(), changed = false)
 
         vm.onWebViewPageFinished(); advanceUntilIdle()
 
-        verify { sessionNotifier.schedule(expiry) }
+        verify { sessionNotifier.schedule(expiry, true) }
         coVerify { coordinator.sync("jwt-token") }
+    }
+
+    @Test
+    fun `server without refresh support is never asked to refresh and warns to log in again`() = runTest {
+        val expiry = System.currentTimeMillis() + 2 * day
+        val session = FakeSession(expiry, canRefresh = false)
+        vm.sessionBridge = session
+        coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(emptyList(), changed = false)
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        assertEquals(0, session.refreshCalls)
+        verify { sessionNotifier.schedule(expiry, false) }
+        coVerify { coordinator.sync("jwt-token") }
+    }
+
+    @Test
+    fun `refresh endpoint missing on the server downgrades the warning to log in again`() = runTest {
+        val expiry = System.currentTimeMillis() + 2 * day
+        vm.sessionBridge = FakeSession(expiry, result = RefreshResult.UNSUPPORTED)
+        coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(emptyList(), changed = false)
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        verify { sessionNotifier.schedule(expiry, false) }
     }
 
     @Test

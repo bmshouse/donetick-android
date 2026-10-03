@@ -38,6 +38,7 @@ class SessionExpiryNotifier @Inject constructor(
         const val NOTIFICATION_ID = 9001
         private const val REQUEST_CODE = 9001
         const val EXTRA_EXPIRY_MS = "expiry_ms"
+        const val EXTRA_CAN_REFRESH = "can_refresh"
 
         val WARN_WINDOW_MS: Long = TimeUnit.DAYS.toMillis(5)
 
@@ -56,7 +57,7 @@ class SessionExpiryNotifier @Inject constructor(
             }
         }
 
-        fun showWarning(context: Context, expiryMs: Long) {
+        fun showWarning(context: Context, expiryMs: Long, canRefresh: Boolean) {
             val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
                     PackageManager.PERMISSION_GRANTED
@@ -78,10 +79,11 @@ class SessionExpiryNotifier @Inject constructor(
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             val expiresOn = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(expiryMs))
+            val action = if (canRefresh) "Open the app" else "Log in again"
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Donetick login expiring soon")
-                .setContentText("Open the app before $expiresOn to keep chore notifications working")
+                .setContentText("$action before $expiresOn to keep chore notifications working")
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setContentIntent(openApp)
                 .setAutoCancel(true)
@@ -103,36 +105,39 @@ class SessionExpiryNotifier @Inject constructor(
 
     /**
      * Arms the warning for a token expiring at [expiryMs], replacing any earlier one. If the
-     * warning time has already passed, the warning is shown immediately.
+     * warning time has already passed, the warning is shown immediately. [canRefresh] picks the
+     * wording: opening the app only helps when the server can refresh the token.
      */
-    fun schedule(expiryMs: Long) {
+    fun schedule(expiryMs: Long, canRefresh: Boolean) {
         cancelAlarm()
 
         val fireAt = warnAt(expiryMs)
         if (fireAt <= System.currentTimeMillis()) {
             Log.d(TAG, "Session within warning window, notifying now (expires ${Date(expiryMs)})")
-            showWarning(context, expiryMs)
+            showWarning(context, expiryMs, canRefresh)
             return
         }
 
         // A fresh token supersedes any warning still on screen.
         NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
         // Inexact is fine for a days-ahead reminder and needs no exact-alarm permission.
-        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, alarmIntent(expiryMs, PendingIntent.FLAG_UPDATE_CURRENT)!!)
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, alarmIntent(expiryMs, canRefresh, PendingIntent.FLAG_UPDATE_CURRENT)!!)
         Log.d(TAG, "Session warning scheduled for ${Date(fireAt)} (token expires ${Date(expiryMs)})")
     }
 
     private fun cancelAlarm() {
-        alarmIntent(0L, PendingIntent.FLAG_NO_CREATE)?.let {
+        alarmIntent(0L, false, PendingIntent.FLAG_NO_CREATE)?.let {
             alarmManager.cancel(it)
             it.cancel()
         }
     }
 
-    private fun alarmIntent(expiryMs: Long, flag: Int): PendingIntent? = PendingIntent.getBroadcast(
+    private fun alarmIntent(expiryMs: Long, canRefresh: Boolean, flag: Int): PendingIntent? = PendingIntent.getBroadcast(
         context,
         REQUEST_CODE,
-        Intent(context, SessionExpiryReceiver::class.java).putExtra(EXTRA_EXPIRY_MS, expiryMs),
+        Intent(context, SessionExpiryReceiver::class.java)
+            .putExtra(EXTRA_EXPIRY_MS, expiryMs)
+            .putExtra(EXTRA_CAN_REFRESH, canRefresh),
         flag or PendingIntent.FLAG_IMMUTABLE
     )
 }

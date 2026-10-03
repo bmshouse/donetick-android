@@ -14,6 +14,10 @@ class SessionExpiryReceiver : BroadcastReceiver() {
             Log.e("SessionExpiryReceiver", "Missing expiry on session warning broadcast")
             return
         }
-        SessionExpiryNotifier.showWarning(context, expiryMs)
+        SessionExpiryNotifier.showWarning(
+            context,
+            expiryMs,
+            intent.getBooleanExtra(SessionExpiryNotifier.EXTRA_CAN_REFRESH, true)
+        )
     }
 }
