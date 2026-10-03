@@ -2,6 +2,7 @@ package org.chaosorderx.donetick.ui.webview
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import org.chaosorderx.donetick.data.sync.ChoreSyncCoordinator
 import org.chaosorderx.donetick.domain.usecase.CheckServerConnectivityUseCase
 import org.chaosorderx.donetick.domain.usecase.GetServerConfigUseCase
 import org.chaosorderx.donetick.notification.ChoreNotificationManager
+import org.chaosorderx.donetick.notification.SessionExpiryNotifier
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
@@ -41,6 +43,7 @@ class WebViewViewModelTest {
     private lateinit var checkConnectivity: CheckServerConnectivityUseCase
     private lateinit var notifications: ChoreNotificationManager
     private lateinit var coordinator: ChoreSyncCoordinator
+    private lateinit var sessionNotifier: SessionExpiryNotifier
 
     private fun chore(
         id: Int,
@@ -64,11 +67,12 @@ class WebViewViewModelTest {
         checkConnectivity = mockk()
         notifications = mockk(relaxed = true)
         coordinator = mockk()
+        sessionNotifier = mockk(relaxed = true)
 
         coEvery { getServerConfig.getCurrentConfig() } returns
             ServerConfig(url = "https://example.com", isConfigured = true, lastValidated = 1L)
 
-        vm = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator)
+        vm = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator, sessionNotifier)
         vm.jwtReader = tokenReader("jwt-token")
     }
 
@@ -88,7 +92,7 @@ class WebViewViewModelTest {
     @Test
     fun `unconfigured server navigates to setup`() = runTest {
         coEvery { getServerConfig.getCurrentConfig() } returns ServerConfig(url = "", isConfigured = false)
-        val viewModel = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator)
+        val viewModel = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator, sessionNotifier)
         advanceUntilIdle()
         assertTrue(viewModel.navigationEvent.value is WebViewNavigationEvent.NavigateToSetup)
     }
@@ -166,6 +170,57 @@ class WebViewViewModelTest {
         assertEquals(listOf("Keep me"), vm.uiState.value.choresList.map { it.name })
     }
 
+    private class FakeSession(var expiry: Long?, val refreshedExpiry: Long? = null, val refreshOk: Boolean = true) : SessionBridge {
+        var refreshCalls = 0
+        override suspend fun readTokenExpiryMillis(): Long? = expiry
+        override suspend fun refreshToken(): Boolean {
+            refreshCalls++
+            if (refreshOk && refreshedExpiry != null) expiry = refreshedExpiry
+            return refreshOk
+        }
+    }
+
+    private val day = 24L * 60 * 60 * 1000
+
+    @Test
+    fun `token far from expiry is not refreshed and warning is armed`() = runTest {
+        val expiry = System.currentTimeMillis() + 20 * day
+        val session = FakeSession(expiry)
+        vm.sessionBridge = session
+        coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(emptyList(), changed = false)
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        assertEquals(0, session.refreshCalls)
+        verify { sessionNotifier.schedule(expiry) }
+    }
+
+    @Test
+    fun `token inside the 5 day window is refreshed and warning moves to the new expiry`() = runTest {
+        val newExpiry = System.currentTimeMillis() + 30 * day
+        val session = FakeSession(System.currentTimeMillis() + 4 * day, refreshedExpiry = newExpiry)
+        vm.sessionBridge = session
+        coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(emptyList(), changed = false)
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        assertEquals(1, session.refreshCalls)
+        verify { sessionNotifier.schedule(newExpiry) }
+    }
+
+    @Test
+    fun `failed refresh inside the window keeps the old expiry so the warning shows`() = runTest {
+        val expiry = System.currentTimeMillis() + 2 * day
+        val session = FakeSession(expiry, refreshOk = false)
+        vm.sessionBridge = session
+        coEvery { coordinator.sync(any()) } returns ChoreSyncCoordinator.Outcome.Success(emptyList(), changed = false)
+
+        vm.onWebViewPageFinished(); advanceUntilIdle()
+
+        verify { sessionNotifier.schedule(expiry) }
+        coVerify { coordinator.sync("jwt-token") }
+    }
+
     @Test
     fun `handleChoreMarkedDone cancels that chore's notification and marks it complete`() = runTest {
         coEvery { coordinator.sync(any()) } returns
@@ -193,7 +248,7 @@ class WebViewViewModelTest {
     @Test
     fun `clearNavigationEvent clears the event`() = runTest {
         coEvery { getServerConfig.getCurrentConfig() } returns ServerConfig(url = "", isConfigured = false)
-        val viewModel = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator)
+        val viewModel = WebViewViewModel(getServerConfig, checkConnectivity, notifications, coordinator, sessionNotifier)
         advanceUntilIdle()
         assertNotNull(viewModel.navigationEvent.value)
         viewModel.clearNavigationEvent()

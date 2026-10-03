@@ -254,6 +254,11 @@ class WebViewActivity : ComponentActivity() {
         }
 
         @android.webkit.JavascriptInterface
+        fun onSessionRefreshed(success: Boolean) {
+            runOnUiThread { viewModel.onSessionRefreshResult(success) }
+        }
+
+        @android.webkit.JavascriptInterface
         fun onAuthActivity() {
             runOnUiThread { viewModel.onWebAuthActivity() }
         }

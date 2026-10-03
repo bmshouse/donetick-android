@@ -11,7 +11,9 @@ import org.chaosorderx.donetick.data.sync.ChoreSyncCoordinator
 import org.chaosorderx.donetick.domain.usecase.CheckServerConnectivityUseCase
 import org.chaosorderx.donetick.domain.usecase.GetServerConfigUseCase
 import org.chaosorderx.donetick.notification.ChoreNotificationManager
+import org.chaosorderx.donetick.notification.SessionExpiryNotifier
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -21,6 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.time.Instant
 import java.lang.ref.WeakReference
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -34,6 +38,18 @@ interface JwtReader {
 }
 
 /**
+ * The WebView's login session: reads when the token expires and refreshes it. Refresh runs
+ * inside the page so the HttpOnly refresh cookie is sent exactly as the web client sends it.
+ */
+interface SessionBridge {
+    /** Token expiry in epoch millis, or null if unknown / not logged in. */
+    suspend fun readTokenExpiryMillis(): Long?
+
+    /** Calls `/auth/refresh` and stores the new tokens; true on success. */
+    suspend fun refreshToken(): Boolean
+}
+
+/**
  * ViewModel for the WebView screen
  */
 @HiltViewModel
@@ -41,12 +57,42 @@ class WebViewViewModel @Inject constructor(
     private val getServerConfigUseCase: GetServerConfigUseCase,
     private val checkServerConnectivityUseCase: CheckServerConnectivityUseCase,
     private val choreNotificationManager: ChoreNotificationManager,
-    private val choreSyncCoordinator: ChoreSyncCoordinator
+    private val choreSyncCoordinator: ChoreSyncCoordinator,
+    private val sessionExpiryNotifier: SessionExpiryNotifier
 ) : ViewModel() {
 
     private companion object {
         const val TAG = "WebViewViewModel"
         const val AUTH_ACTIVITY_DEBOUNCE_MS = 800L
+        const val REFRESH_TIMEOUT_MS = 15_000L
+
+        /** Mirrors the web client's refresh call, then stores the tokens under the same keys. */
+        const val REFRESH_SCRIPT = """
+            (async function() {
+                try {
+                    var r = await fetch('/api/v1/auth/refresh', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + localStorage.getItem('token')
+                        }
+                    });
+                    if (!r.ok) { AndroidApiCapture.onSessionRefreshed(false); return; }
+                    var j = await r.json();
+                    var t = j.token || j.access_token;
+                    if (!t) { AndroidApiCapture.onSessionRefreshed(false); return; }
+                    localStorage.setItem('token', t);
+                    var e = j.expire || j.access_token_expiry;
+                    if (e) localStorage.setItem('token_expiry', e);
+                    if (j.refresh_token) localStorage.setItem('refresh_token', j.refresh_token);
+                    if (j.refresh_token_expiry) localStorage.setItem('refresh_token_expiry', j.refresh_token_expiry);
+                    AndroidApiCapture.onSessionRefreshed(true);
+                } catch (err) {
+                    AndroidApiCapture.onSessionRefreshed(false);
+                }
+            })();
+        """
     }
 
     private val _uiState = MutableStateFlow(WebViewUiState.initial())
@@ -59,6 +105,11 @@ class WebViewViewModel @Inject constructor(
 
     /** Overridable for tests; the production reader is installed in [setWebView]. */
     var jwtReader: JwtReader? = null
+
+    /** Overridable for tests; the production bridge is installed in [setWebView]. */
+    var sessionBridge: SessionBridge? = null
+
+    private var pendingRefresh: CompletableDeferred<Boolean>? = null
 
     private var syncJob: Job? = null
     private var lastScheduledChores: List<ChoreItem> = emptyList()
@@ -99,6 +150,7 @@ class WebViewViewModel @Inject constructor(
         val ref = WeakReference(webView)
         this.webView = ref
         if (jwtReader == null) jwtReader = WebViewJwtReader(ref)
+        if (sessionBridge == null) sessionBridge = WebViewSessionBridge(ref)
         setupWebView()
     }
 
@@ -120,6 +172,37 @@ class WebViewViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /** Reads the expiry from `localStorage` and refreshes by running `/auth/refresh` in the page. */
+    private inner class WebViewSessionBridge(
+        private val webViewRef: WeakReference<WebView>
+    ) : SessionBridge {
+        override suspend fun readTokenExpiryMillis(): Long? = withContext(Dispatchers.Main) {
+            val wv = webViewRef.get() ?: return@withContext null
+            suspendCancellableCoroutine { cont ->
+                wv.evaluateJavascript(
+                    "(function(){try{return localStorage.getItem('token_expiry')}catch(e){return null}})()"
+                ) { raw ->
+                    val text = raw?.trim()?.removeSurrounding("\"")
+                    cont.resume(runCatching { Instant.parse(text).toEpochMilli() }.getOrNull())
+                }
+            }
+        }
+
+        override suspend fun refreshToken(): Boolean {
+            val deferred = CompletableDeferred<Boolean>().also { pendingRefresh = it }
+            withContext(Dispatchers.Main) {
+                webViewRef.get()?.evaluateJavascript(REFRESH_SCRIPT, null)
+                    ?: deferred.complete(false)
+            }
+            return withTimeoutOrNull(REFRESH_TIMEOUT_MS) { deferred.await() } ?: false
+        }
+    }
+
+    /** Called by the JS bridge when the in-page refresh finishes. */
+    fun onSessionRefreshResult(success: Boolean) {
+        pendingRefresh?.complete(success)
     }
 
     /**
@@ -287,11 +370,14 @@ class WebViewViewModel @Inject constructor(
         if (syncJob?.isActive == true) return
         syncJob = viewModelScope.launch {
             if (debounceMs > 0L) delay(debounceMs)
-            val token = jwtReader?.read()
-            if (token.isNullOrEmpty()) {
+            if (jwtReader?.read().isNullOrEmpty()) {
                 Log.d(TAG, "Sync skipped: no auth token yet (user not logged in)")
                 return@launch
             }
+            maintainSession()
+            // Re-read: maintainSession may have swapped in a freshly refreshed token.
+            val token = jwtReader?.read()
+            if (token.isNullOrEmpty()) return@launch
             when (val outcome = choreSyncCoordinator.sync(token)) {
                 is ChoreSyncCoordinator.Outcome.Success -> {
                     // The sync feed is the whole circle; the UI and the scheduler only care
@@ -313,6 +399,23 @@ class WebViewViewModel @Inject constructor(
                     Log.w(TAG, "Sync failed", outcome.cause)
             }
         }
+    }
+
+    /**
+     * Keeps the login from lapsing. Opening the app inside the 5-day warning window refreshes
+     * the token; either way the warning alarm is (re)armed for 5 days before the current expiry.
+     */
+    private suspend fun maintainSession() {
+        val bridge = sessionBridge ?: return
+        var expiry = bridge.readTokenExpiryMillis() ?: return
+        if (System.currentTimeMillis() >= SessionExpiryNotifier.warnAt(expiry)) {
+            if (bridge.refreshToken()) {
+                expiry = bridge.readTokenExpiryMillis() ?: expiry
+            } else {
+                Log.w(TAG, "Session refresh failed; user must reopen or sign in again")
+            }
+        }
+        sessionExpiryNotifier.schedule(expiry)
     }
 
     /**
