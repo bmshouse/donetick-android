@@ -198,7 +198,9 @@ class WebViewActivity : ComponentActivity() {
      *  - `POST /api/v1/chores/{id}/do` — so a chore's notification cancels the instant the user
      *    taps "done" in the web UI, without waiting for the next sync cycle
      *  - `/api/v1/auth/` calls — a login that happens without a full page reload, after which
-     *    `onPageFinished` never fires again
+     *    `onPageFinished` never fires again. The web client discards the `refresh_token` that
+     *    login/refresh return, so it is kept in `localStorage` here for [WebViewViewModel]'s
+     *    session refresh (and dropped again on logout).
      */
     private fun injectApiInterceptorScript(webView: WebView?) {
         val script = """
@@ -212,6 +214,15 @@ class WebViewActivity : ComponentActivity() {
                     if (x && typeof x.href === 'string') return x.href;
                     return '';
                 }
+                function keepRefreshToken(url, resp) {
+                    try {
+                        if (!url || !url.match(/\/api\/v1\/auth\//)) return;
+                        if (url.match(/\/auth\/logout/)) { localStorage.removeItem('refresh_token'); return; }
+                        resp.clone().json().then(function(j) {
+                            if (j && j.refresh_token) localStorage.setItem('refresh_token', j.refresh_token);
+                        }).catch(function() {});
+                    } catch (e) { console.error('dt hook error', e); }
+                }
                 function inspect(url) {
                     try {
                         if (!url) return;
@@ -224,7 +235,7 @@ class WebViewActivity : ComponentActivity() {
                 var of = window.fetch;
                 window.fetch = function() {
                     var url = u(arguments[0]);
-                    return of.apply(this, arguments).then(function(r) { inspect(url); return r; });
+                    return of.apply(this, arguments).then(function(r) { keepRefreshToken(url, r); inspect(url); return r; });
                 };
 
                 var xo = XMLHttpRequest.prototype.open;
@@ -251,6 +262,11 @@ class WebViewActivity : ComponentActivity() {
         @android.webkit.JavascriptInterface
         fun onChoreMarkedDone(choreId: Int) {
             runOnUiThread { viewModel.handleChoreMarkedDone(choreId) }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onSessionRefreshed(result: String) {
+            runOnUiThread { viewModel.onSessionRefreshResult(result) }
         }
 
         @android.webkit.JavascriptInterface
