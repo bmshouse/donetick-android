@@ -66,17 +66,23 @@ class WebViewViewModel @Inject constructor(
         const val AUTH_ACTIVITY_DEBOUNCE_MS = 800L
         const val REFRESH_TIMEOUT_MS = 15_000L
 
-        /** Mirrors the web client's refresh call, then stores the tokens under the same keys. */
+        /**
+         * `/auth/refresh` requires `{"refresh_token": ...}` in the body (the cookie alone gets a
+         * 400). The token is kept in localStorage by the hook in WebViewActivity.
+         */
         const val REFRESH_SCRIPT = """
             (async function() {
                 try {
+                    var rt = localStorage.getItem('refresh_token');
+                    if (!rt) { AndroidApiCapture.onSessionRefreshed(false); return; }
                     var r = await fetch('/api/v1/auth/refresh', {
                         method: 'POST',
                         credentials: 'include',
                         headers: {
                             'Content-Type': 'application/json',
                             'Authorization': 'Bearer ' + localStorage.getItem('token')
-                        }
+                        },
+                        body: JSON.stringify({ refresh_token: rt })
                     });
                     if (!r.ok) { AndroidApiCapture.onSessionRefreshed(false); return; }
                     var j = await r.json();
